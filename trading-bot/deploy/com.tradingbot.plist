@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradingbot</string>
+
+    <!-- Что запускать. __BOT_DIR__ подставляет install-macos.sh -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__BOT_DIR__/deploy/run.sh</string>
+    </array>
+
+    <!-- Запускать при логине и держать запущенным (авто-рестарт при падении). -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Пауза между перезапусками, чтобы не уйти в цикл рестартов. -->
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>WorkingDirectory</key>
+    <string>__BOT_DIR__</string>
+
+    <!-- Логи бота. -->
+    <key>StandardOutPath</key>
+    <string>__BOT_DIR__/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>__BOT_DIR__/bot.log</string>
+</dict>
+</plist>

@@ -37,6 +37,20 @@ def main() -> int:
         log.warning("=" * 60)
 
     exchange = Exchange(cfg.api_key, cfg.api_secret, cfg.testnet, cfg.dry_run)
+
+    # Проверка ключей и прав доступа до начала торговли.
+    if not cfg.dry_run:
+        try:
+            info = exchange.verify_credentials()
+        except Exception as exc:  # noqa: BLE001 — стартовая диагностика
+            log.error("Проверка API-ключей не пройдена: %s", exc)
+            return 1
+        log.info("Ключи OK | canTrade=%s | балансы: %s",
+                 info["can_trade"], info["balances"] or "пусто")
+        if not info["can_trade"]:
+            log.error("Аккаунт не может торговать (canTrade=false). Проверь права ключа.")
+            return 1
+
     trader = DcaTrader(cfg, exchange) if cfg.strategy == "dca" else Trader(cfg, exchange)
     log.info("Стратегия: %s", cfg.strategy)
 

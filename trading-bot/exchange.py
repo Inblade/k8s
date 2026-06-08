@@ -17,6 +17,33 @@ class Exchange:
         self.client = Client(api_key or None, api_secret or None, testnet=testnet)
         self._filters_cache: dict[str, dict] = {}
 
+    # ── Проверка доступа при старте ────────────────────────────────────
+    def verify_credentials(self) -> dict:
+        """Проверяет, что ключи валидны, есть право Spot и НЕТ права вывода.
+
+        Бросает исключение с понятным текстом, если что-то не так. Возвращает
+        словарь с краткой сводкой по счёту для лога.
+        """
+        self.client.ping()  # связь с биржей
+        account = self.client.get_account()  # подпись ключа верна?
+
+        # Проверка прав доступна только на боевой сети (на testnet эндпоинта нет).
+        if not self.testnet:
+            perms = self.client.get_account_api_permissions()
+            if perms.get("enableWithdrawals"):
+                raise PermissionError(
+                    "ОПАСНО: у API-ключа включено право вывода средств (Withdrawals). "
+                    "Отключи его в настройках ключа на Binance и создай ключ заново."
+                )
+            if not perms.get("enableSpotAndMarginTrading"):
+                raise PermissionError(
+                    "У ключа нет права спот-торговли. Включи 'Enable Spot & Margin Trading'."
+                )
+
+        balances = {b["asset"]: float(b["free"]) for b in account.get("balances", [])
+                    if float(b["free"]) > 0}
+        return {"can_trade": account.get("canTrade"), "balances": balances}
+
     # ── Рыночные данные ────────────────────────────────────────────────
     def get_closes(self, symbol: str, interval: str, limit: int) -> list[float]:
         klines = self.client.get_klines(symbol=symbol, interval=interval, limit=limit)
