@@ -48,8 +48,9 @@ PAGE = """
 <body>
 <header>
   <h1>🤖 Trading Bot — дашборд</h1>
-  <div class="sub">{{ symbol }} · стратегия {{ strategy }} · режим {{ mode }} · обновляется автоматически</div>
+  <div class="sub">{{ symbols }} · стратегия {{ strategy }} · режим {{ mode }} · обновляется автоматически</div>
 </header>
+<div id="hint" style="display:none; margin:0 24px; padding:12px 16px; background:#3a2a00; border:1px solid #6b4f00; border-radius:8px; color:#e3b341;"></div>
 <div class="cards" id="cards"></div>
 <div class="grid">
   <div class="panel full"><h2>Кривая капитала (equity)</h2><canvas id="equityChart" height="90"></canvas></div>
@@ -57,12 +58,20 @@ PAGE = """
   <div class="panel full"><h2>Журнал сделок (последние 50)</h2><div id="trades"></div></div>
 </div>
 <script>
+const PRIMARY = "{{ symbol }}";
 let equityChart, priceChart;
 function money(x){ return (x>=0?'':'-') + '$' + Math.abs(x).toFixed(2); }
 function cls(x){ return x>=0?'pos':'neg'; }
 
 async function load(){
   const d = await (await fetch('/api/data')).json();
+  // подсказка, если данных ещё нет
+  const hint = document.getElementById('hint');
+  if(d.equity.length === 0){
+    hint.style.display = 'block';
+    hint.textContent = '⏳ Данных пока нет. Запущен ли бот (python main.py) в этой же папке? '
+      + 'График заполнится после первого опроса рынка (см. POLL_INTERVAL_SECONDS).';
+  } else { hint.style.display = 'none'; }
   // карточки
   const c = d.summary;
   document.getElementById('cards').innerHTML = `
@@ -84,10 +93,11 @@ async function load(){
     });
   } else { equityChart.data.labels=eLabels; equityChart.data.datasets[0].data=d.equity.map(r=>r.equity); equityChart.update(); }
 
-  // price + маркеры сделок
+  // price + маркеры сделок (по основной монете — у разных монет разный масштаб цены)
   const pLabels = d.equity.map(r => r.time.slice(5,16).replace('T',' '));
-  const buys = d.trades.filter(t=>t.side==='BUY').map(t=>({x:t.time.slice(5,16).replace('T',' '), y:+t.price}));
-  const sells = d.trades.filter(t=>t.side==='SELL').map(t=>({x:t.time.slice(5,16).replace('T',' '), y:+t.price}));
+  const prim = d.trades.filter(t => (t.symbol||PRIMARY) === PRIMARY);
+  const buys = prim.filter(t=>t.side==='BUY').map(t=>({x:t.time.slice(5,16).replace('T',' '), y:+t.price}));
+  const sells = prim.filter(t=>t.side==='SELL').map(t=>({x:t.time.slice(5,16).replace('T',' '), y:+t.price}));
   if(!priceChart){
     priceChart = new Chart(document.getElementById('priceChart'), {
       type:'line',
@@ -108,12 +118,13 @@ async function load(){
   // таблица сделок
   const rows = d.trades.slice(-50).reverse().map(t=>`<tr>
     <td>${t.time.slice(0,16).replace('T',' ')}</td>
+    <td>${t.symbol||PRIMARY}</td>
     <td class="${t.side==='BUY'?'pos':'neg'}">${t.side}</td>
     <td>${t.reason}</td><td>$${(+t.price).toFixed(2)}</td>
     <td>${(+t.qty).toFixed(6)}</td><td>$${(+t.quote).toFixed(2)}</td>
     <td class="${cls(+t.realized_pnl)}">${t.side==='SELL'?money(+t.realized_pnl):''}</td></tr>`).join('');
   document.getElementById('trades').innerHTML =
-    `<table><thead><tr><th>Время</th><th>Сторона</th><th>Причина</th><th>Цена</th><th>Кол-во</th><th>Сумма</th><th>P&L</th></tr></thead><tbody>${rows}</tbody></table>`;
+    `<table><thead><tr><th>Время</th><th>Монета</th><th>Сторона</th><th>Причина</th><th>Цена</th><th>Кол-во</th><th>Сумма</th><th>P&L</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 load(); setInterval(load, 15000);
 </script>
@@ -125,7 +136,10 @@ load(); setInterval(load, 15000);
 @app.route("/")
 def index():
     mode = "DRY_RUN" if cfg.dry_run else ("TESTNET" if cfg.testnet else "РЕАЛЬНЫЙ")
-    return render_template_string(PAGE, symbol=cfg.symbol, strategy=cfg.strategy, mode=mode)
+    return render_template_string(
+        PAGE, symbols=", ".join(cfg.symbols), symbol=cfg.symbol,
+        strategy=cfg.strategy, mode=mode,
+    )
 
 
 @app.route("/api/data")

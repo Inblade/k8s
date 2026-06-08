@@ -1,4 +1,4 @@
-"""Живой торговый цикл для DCA-стратегии."""
+"""Живой торговый цикл для DCA-стратегии. Поддерживает несколько монет сразу."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,7 @@ from withdrawal import ProfitWithdrawer
 
 log = logging.getLogger("bot.dca")
 
-STATE_FILE = Path(__file__).with_name("dca_state.json")
+DIR = Path(__file__).parent
 
 
 def params_from_config(cfg: Config) -> DcaParams:
@@ -29,81 +29,101 @@ def params_from_config(cfg: Config) -> DcaParams:
     )
 
 
+def _state_file(symbol: str) -> Path:
+    return DIR / f"dca_state_{symbol}.json"
+
+
 class DcaTrader:
     def __init__(self, cfg: Config, exchange: Exchange):
         self.cfg = cfg
         self.ex = exchange
         params = params_from_config(cfg)
-        if STATE_FILE.exists():
-            self.engine = DcaEngine.from_state_dict(params, json.loads(STATE_FILE.read_text()))
-        else:
-            self.engine = DcaEngine(params)
+        # Отдельный движок и файл состояния на каждую монету.
+        self.engines: dict[str, DcaEngine] = {}
+        for sym in cfg.symbols:
+            sf = _state_file(sym)
+            if sf.exists():
+                self.engines[sym] = DcaEngine.from_state_dict(params, json.loads(sf.read_text()))
+            else:
+                self.engines[sym] = DcaEngine(params)
         self.withdrawer = ProfitWithdrawer(cfg, exchange)
 
-    def _save(self) -> None:
-        STATE_FILE.write_text(json.dumps(self.engine.state_dict()))
+    def _save(self, symbol: str) -> None:
+        _state_file(symbol).write_text(json.dumps(self.engines[symbol].state_dict()))
 
-    def _record_equity(self, price: float) -> None:
-        s = self.engine.state
-        position_value = s.qty * price
-        unrealized = position_value - s.spent if s.in_position else 0.0
+    # ── Обработка одной монеты ─────────────────────────────────────────
+    def _process_symbol(self, symbol: str, price: float) -> None:
+        engine = self.engines[symbol]
+        s = engine.state
+        if s.in_position:
+            log.info("[%s] Цена=%.2f средняя=%.2f объём=%.8f safety=%d/%d след.докупка<=%.2f",
+                     symbol, price, s.avg_entry, s.qty, s.safety_filled,
+                     self.cfg.dca_max_safety_orders, s.next_safety_price)
+        else:
+            log.info("[%s] Цена=%.2f вне позиции (ждём базовый ордер)", symbol, price)
+
+        order = engine.decide(price)
+        if order is None:
+            return
+
+        if order.action == Action.BUY:
+            result = self.ex.market_buy_quote(symbol, order.quote)
+            qty = float(result.get("qty") or result.get("executedQty", 0.0))
+            spent = float(result.get("cummulativeQuoteQty") or order.quote)
+            engine.apply_buy(price, spent, qty)
+            avg = engine.state.avg_entry
+            log.info("[%s] >>> ПОКУПКА (%s): +%.8f за %.2f USDT | средняя=%.2f",
+                     symbol, order.reason, qty, spent, avg)
+            journal.record_trade(symbol, "BUY", order.reason, price, qty, spent, avg)
+        elif order.action == Action.SELL_ALL:
+            proceeds = s.qty * price * (1 - self.cfg.fee_pct / 100)
+            realized = proceeds - s.spent
+            pnl_pct = (price / s.avg_entry - 1) * 100 if s.avg_entry else 0
+            self.ex.market_sell_qty(symbol, s.qty)
+            log.info("[%s] <<< ПРОДАЖА (%s): %.8f по ~%.2f | P&L=%.2f%% (%.2f USDT)",
+                     symbol, order.reason, s.qty, price, pnl_pct, realized)
+            journal.record_trade(symbol, "SELL", order.reason, price, s.qty,
+                                 proceeds, s.avg_entry, realized)
+            engine.apply_sell_all()
+            self.withdrawer.on_realized_profit(realized)
+        self._save(symbol)
+
+    # ── Снимок суммарного капитала по всем монетам ─────────────────────
+    def _record_equity(self, prices: dict[str, float]) -> None:
+        total_value = 0.0
+        total_spent = 0.0
+        for sym, engine in self.engines.items():
+            st = engine.state
+            if st.in_position:
+                total_value += st.qty * prices[sym]
+                total_spent += st.spent
         realized = self.withdrawer.state.realized_pnl_total
+        unrealized = total_value - total_spent
         equity = self.cfg.trade_quote_amount + realized + unrealized
+        # В колонку price пишем цену первой (основной) монеты — для графика цены.
         journal.record_equity(
-            price=price, position_qty=s.qty, position_value=position_value,
+            price=prices[self.cfg.symbol], position_qty=0.0, position_value=total_value,
             unrealized_pnl=unrealized, realized_pnl=realized, equity=equity,
             withdrawn=self.withdrawer.state.withdrawn_total,
             reserve=self.withdrawer.state.reserve,
         )
 
     def step(self) -> None:
-        price = self.ex.get_price(self.cfg.symbol)
-        s = self.engine.state
-        if s.in_position:
-            log.info(
-                "Цена=%.2f  средняя=%.2f  объём=%.8f  потрачено=%.2f  safety=%d/%d  след.докупка<=%.2f",
-                price, s.avg_entry, s.qty, s.spent, s.safety_filled,
-                self.cfg.dca_max_safety_orders, s.next_safety_price,
-            )
-        else:
-            log.info("Цена=%.2f  вне позиции (ждём базовый ордер)", price)
-
-        order = self.engine.decide(price)
-        if order is None:
-            self._record_equity(price)
-            return
-
-        if order.action == Action.BUY:
-            result = self.ex.market_buy_quote(self.cfg.symbol, order.quote)
-            qty = float(result.get("qty") or result.get("executedQty", 0.0))
-            spent = float(result.get("cummulativeQuoteQty") or order.quote)
-            self.engine.apply_buy(price, spent, qty)
-            avg = self.engine.state.avg_entry
-            log.info(">>> ПОКУПКА (%s): +%.8f за %.2f USDT | новая средняя=%.2f",
-                     order.reason, qty, spent, avg)
-            journal.record_trade("BUY", order.reason, price, qty, spent, avg)
-        elif order.action == Action.SELL_ALL:
-            proceeds = s.qty * price * (1 - self.cfg.fee_pct / 100)
-            realized = proceeds - s.spent
-            pnl_pct = (price / s.avg_entry - 1) * 100 if s.avg_entry else 0
-            self.ex.market_sell_qty(self.cfg.symbol, s.qty)
-            log.info("<<< ПРОДАЖА ВСЕГО (%s): %.8f по ~%.2f | P&L=%.2f%% (%.2f USDT) | цикл завершён",
-                     order.reason, s.qty, price, pnl_pct, realized)
-            journal.record_trade("SELL", order.reason, price, s.qty, proceeds,
-                                 s.avg_entry, realized)
-            self.engine.apply_sell_all()
-            self.withdrawer.on_realized_profit(realized)
-        self._save()
-        self._record_equity(price)
+        # Цены берём один раз за шаг, чтобы не дёргать API повторно.
+        prices = {sym: self.ex.get_price(sym) for sym in self.cfg.symbols}
+        for sym in self.cfg.symbols:
+            self._process_symbol(sym, prices[sym])
+        self._record_equity(prices)
 
     def run(self) -> None:
         log.info(
-            "Старт DCA | %s | DRY_RUN=%s TESTNET=%s | база=%.0f safety=%.0f x%d "
-            "дев=%.1f%% TP=%.1f%% | макс.бюджет=%.0f USDT",
-            self.cfg.symbol, self.ex.dry_run, self.ex.testnet,
+            "Старт DCA | монеты: %s | DRY_RUN=%s TESTNET=%s | база=%.0f safety=%.0f x%d "
+            "дев=%.1f%% TP=%.1f%% | бюджет/монета=%.0f, всего=%.0f USDT",
+            ", ".join(self.cfg.symbols), self.ex.dry_run, self.ex.testnet,
             self.cfg.dca_base_order, self.cfg.dca_safety_order,
             self.cfg.dca_max_safety_orders, self.cfg.dca_price_deviation_pct,
             self.cfg.dca_take_profit_pct, self.cfg.max_dca_budget(),
+            self.cfg.max_dca_budget() * len(self.cfg.symbols),
         )
         while True:
             try:

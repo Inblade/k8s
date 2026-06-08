@@ -26,6 +26,15 @@ def _get_int(name: str, default: int) -> int:
     return int(val) if val not in (None, "") else default
 
 
+def _get_symbols() -> list[str]:
+    """Список пар. SYMBOLS (через запятую) имеет приоритет над SYMBOL."""
+    raw = os.getenv("SYMBOLS") or os.getenv("SYMBOL") or "BTCUSDT"
+    syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    # Убираем дубликаты, сохраняя порядок.
+    seen: set[str] = set()
+    return [s for s in syms if not (s in seen or seen.add(s))]
+
+
 @dataclass
 class Config:
     api_key: str
@@ -35,7 +44,7 @@ class Config:
 
     strategy: str  # "swing" или "dca"
 
-    symbol: str
+    symbols: list[str]  # список торгуемых пар (мульти-монета)
     interval: str
     trade_quote_amount: float
 
@@ -81,7 +90,7 @@ class Config:
             dry_run=_get_bool("DRY_RUN", True),
             testnet=_get_bool("TESTNET", True),
             strategy=os.getenv("STRATEGY", "dca").lower(),
-            symbol=os.getenv("SYMBOL", "BTCUSDT").upper(),
+            symbols=_get_symbols(),
             interval=os.getenv("INTERVAL", "15m"),
             trade_quote_amount=_get_float("TRADE_QUOTE_AMOUNT", 250.0),
             stop_loss_pct=_get_float("STOP_LOSS_PCT", 2.0),
@@ -111,9 +120,16 @@ class Config:
         cfg.validate()
         return cfg
 
+    @property
+    def symbol(self) -> str:
+        """Первая пара — для совместимости и заголовков."""
+        return self.symbols[0]
+
     def validate(self) -> None:
         if self.strategy not in {"swing", "dca"}:
             raise ValueError("STRATEGY должна быть 'swing' или 'dca'")
+        if not self.symbols:
+            raise ValueError("Не задана ни одна торговая пара (SYMBOL / SYMBOLS)")
         if self.fast_ma >= self.slow_ma:
             raise ValueError("FAST_MA должна быть меньше SLOW_MA")
         if self.trade_quote_amount <= 0:
@@ -121,11 +137,15 @@ class Config:
         if self.strategy == "dca":
             if self.dca_base_order <= 0 or self.dca_safety_order < 0:
                 raise ValueError("DCA_BASE_ORDER должен быть > 0, DCA_SAFETY_ORDER >= 0")
-            if self.max_dca_budget() > self.trade_quote_amount:
+            # Каждая монета может задействовать полный бюджет цикла независимо,
+            # поэтому суммарная экспозиция = бюджет цикла × число монет.
+            total = self.max_dca_budget() * len(self.symbols)
+            if total > self.trade_quote_amount:
                 raise ValueError(
-                    f"Бюджет DCA ({self.max_dca_budget():.2f} USDT) превышает "
-                    f"TRADE_QUOTE_AMOUNT ({self.trade_quote_amount:.2f}). "
-                    "Уменьши размеры ордеров или число safety-ордеров."
+                    f"Суммарный бюджет DCA на {len(self.symbols)} монет(ы) = "
+                    f"{total:.2f} USDT превышает TRADE_QUOTE_AMOUNT "
+                    f"({self.trade_quote_amount:.2f}). Уменьши размеры ордеров, число "
+                    "safety-ордеров или количество монет."
                 )
         # Реальные ордера невозможны без ключей.
         if not self.dry_run and (not self.api_key or not self.api_secret):
