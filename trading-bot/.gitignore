@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 state.json
 dca_state.json
+withdraw_state.json
+trades.csv
+equity.csv
 bot.log
 .venv/
 venv/

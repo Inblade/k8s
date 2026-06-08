@@ -6,9 +6,11 @@ import logging
 import time
 from pathlib import Path
 
+import journal
 from config import Config
 from dca import Action, DcaEngine, DcaParams
 from exchange import Exchange
+from withdrawal import ProfitWithdrawer
 
 log = logging.getLogger("bot.dca")
 
@@ -36,9 +38,23 @@ class DcaTrader:
             self.engine = DcaEngine.from_state_dict(params, json.loads(STATE_FILE.read_text()))
         else:
             self.engine = DcaEngine(params)
+        self.withdrawer = ProfitWithdrawer(cfg, exchange)
 
     def _save(self) -> None:
         STATE_FILE.write_text(json.dumps(self.engine.state_dict()))
+
+    def _record_equity(self, price: float) -> None:
+        s = self.engine.state
+        position_value = s.qty * price
+        unrealized = position_value - s.spent if s.in_position else 0.0
+        realized = self.withdrawer.state.realized_pnl_total
+        equity = self.cfg.trade_quote_amount + realized + unrealized
+        journal.record_equity(
+            price=price, position_qty=s.qty, position_value=position_value,
+            unrealized_pnl=unrealized, realized_pnl=realized, equity=equity,
+            withdrawn=self.withdrawer.state.withdrawn_total,
+            reserve=self.withdrawer.state.reserve,
+        )
 
     def step(self) -> None:
         price = self.ex.get_price(self.cfg.symbol)
@@ -54,6 +70,7 @@ class DcaTrader:
 
         order = self.engine.decide(price)
         if order is None:
+            self._record_equity(price)
             return
 
         if order.action == Action.BUY:
@@ -61,15 +78,23 @@ class DcaTrader:
             qty = float(result.get("qty") or result.get("executedQty", 0.0))
             spent = float(result.get("cummulativeQuoteQty") or order.quote)
             self.engine.apply_buy(price, spent, qty)
+            avg = self.engine.state.avg_entry
             log.info(">>> ПОКУПКА (%s): +%.8f за %.2f USDT | новая средняя=%.2f",
-                     order.reason, qty, spent, self.engine.state.avg_entry)
+                     order.reason, qty, spent, avg)
+            journal.record_trade("BUY", order.reason, price, qty, spent, avg)
         elif order.action == Action.SELL_ALL:
-            pnl = (price / s.avg_entry - 1) * 100 if s.avg_entry else 0
+            proceeds = s.qty * price * (1 - self.cfg.fee_pct / 100)
+            realized = proceeds - s.spent
+            pnl_pct = (price / s.avg_entry - 1) * 100 if s.avg_entry else 0
             self.ex.market_sell_qty(self.cfg.symbol, s.qty)
-            log.info("<<< ПРОДАЖА ВСЕГО (%s): %.8f по ~%.2f | P&L=%.2f%% | цикл завершён",
-                     order.reason, s.qty, price, pnl)
+            log.info("<<< ПРОДАЖА ВСЕГО (%s): %.8f по ~%.2f | P&L=%.2f%% (%.2f USDT) | цикл завершён",
+                     order.reason, s.qty, price, pnl_pct, realized)
+            journal.record_trade("SELL", order.reason, price, s.qty, proceeds,
+                                 s.avg_entry, realized)
             self.engine.apply_sell_all()
+            self.withdrawer.on_realized_profit(realized)
         self._save()
+        self._record_equity(price)
 
     def run(self) -> None:
         log.info(

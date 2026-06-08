@@ -36,12 +36,19 @@ def main() -> int:
         log.warning("DRY_RUN=false и TESTNET=false. Ты рискуешь реальными средствами.")
         log.warning("=" * 60)
 
+    if cfg.withdraw_enabled and not cfg.dry_run:
+        log.warning("Автовывод ВКЛЮЧЁН: %.0f%% прибыли будет выводиться на %s (%s) "
+                    "при накоплении >= %.0f %s. Ключ должен иметь право вывода — "
+                    "держи включённым белый список адресов на Binance!",
+                    cfg.withdraw_profit_pct, cfg.withdraw_address, cfg.withdraw_network,
+                    cfg.withdraw_min_amount, cfg.withdraw_asset)
+
     exchange = Exchange(cfg.api_key, cfg.api_secret, cfg.testnet, cfg.dry_run)
 
     # Проверка ключей и прав доступа до начала торговли.
     if not cfg.dry_run:
         try:
-            info = exchange.verify_credentials()
+            info = exchange.verify_credentials(expect_withdraw=cfg.withdraw_enabled)
         except Exception as exc:  # noqa: BLE001 — стартовая диагностика
             log.error("Проверка API-ключей не пройдена: %s", exc)
             return 1

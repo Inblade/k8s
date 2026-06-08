@@ -57,6 +57,20 @@ class Config:
     dca_safety_volume_scale: float
     dca_take_profit_pct: float
 
+    # Комиссия биржи (для расчёта реализованной прибыли)
+    fee_pct: float
+
+    # Вывод части прибыли на внешний кошелёк
+    withdraw_enabled: bool
+    withdraw_profit_pct: float
+    withdraw_min_amount: float
+    withdraw_asset: str
+    withdraw_network: str
+    withdraw_address: str
+
+    # Веб-дашборд
+    dashboard_port: int
+
     poll_interval_seconds: int
 
     @classmethod
@@ -84,6 +98,14 @@ class Config:
             dca_safety_step_scale=_get_float("DCA_SAFETY_STEP_SCALE", 1.0),
             dca_safety_volume_scale=_get_float("DCA_SAFETY_VOLUME_SCALE", 1.0),
             dca_take_profit_pct=_get_float("DCA_TAKE_PROFIT_PCT", 3.0),
+            fee_pct=_get_float("FEE_PCT", 0.1),
+            withdraw_enabled=_get_bool("WITHDRAW_ENABLED", False),
+            withdraw_profit_pct=_get_float("WITHDRAW_PROFIT_PCT", 10.0),
+            withdraw_min_amount=_get_float("WITHDRAW_MIN_AMOUNT", 15.0),
+            withdraw_asset=os.getenv("WITHDRAW_ASSET", "USDT").upper(),
+            withdraw_network=os.getenv("WITHDRAW_NETWORK", "TRX").upper(),
+            withdraw_address=os.getenv("WITHDRAW_ADDRESS", "").strip(),
+            dashboard_port=_get_int("DASHBOARD_PORT", 8000),
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
         )
         cfg.validate()
@@ -109,6 +131,10 @@ class Config:
         if not self.dry_run and (not self.api_key or not self.api_secret):
             raise ValueError(
                 "Для боевой торговли (DRY_RUN=false) нужны BINANCE_API_KEY и BINANCE_API_SECRET"
+            )
+        if self.withdraw_enabled and not self.withdraw_address:
+            raise ValueError(
+                "WITHDRAW_ENABLED=true, но не задан WITHDRAW_ADDRESS (адрес кошелька)"
             )
 
     def max_dca_budget(self) -> float:

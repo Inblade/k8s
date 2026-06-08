@@ -18,11 +18,12 @@ class Exchange:
         self._filters_cache: dict[str, dict] = {}
 
     # ── Проверка доступа при старте ────────────────────────────────────
-    def verify_credentials(self) -> dict:
-        """Проверяет, что ключи валидны, есть право Spot и НЕТ права вывода.
+    def verify_credentials(self, expect_withdraw: bool = False) -> dict:
+        """Проверяет, что ключи валидны и права соответствуют ожиданиям.
 
-        Бросает исключение с понятным текстом, если что-то не так. Возвращает
-        словарь с краткой сводкой по счёту для лога.
+        Если expect_withdraw=False — требует, чтобы право вывода было ВЫКЛЮЧЕНО
+        (безопасный режим). Если True (включён автовывод прибыли) — наоборот,
+        требует наличие права вывода и громко предупреждает о рисках.
         """
         self.client.ping()  # связь с биржей
         account = self.client.get_account()  # подпись ключа верна?
@@ -30,11 +31,20 @@ class Exchange:
         # Проверка прав доступна только на боевой сети (на testnet эндпоинта нет).
         if not self.testnet:
             perms = self.client.get_account_api_permissions()
-            if perms.get("enableWithdrawals"):
+            has_withdraw = bool(perms.get("enableWithdrawals"))
+            if not expect_withdraw and has_withdraw:
                 raise PermissionError(
-                    "ОПАСНО: у API-ключа включено право вывода средств (Withdrawals). "
-                    "Отключи его в настройках ключа на Binance и создай ключ заново."
+                    "ОПАСНО: у ключа включено право вывода (Withdrawals), но автовывод "
+                    "выключен. Отключи право вывода у ключа, либо включи WITHDRAW_ENABLED."
                 )
+            if expect_withdraw and not has_withdraw:
+                raise PermissionError(
+                    "WITHDRAW_ENABLED=true, но у ключа НЕТ права вывода. Включи "
+                    "'Enable Withdrawals' у API-ключа (желательно с белым списком адресов)."
+                )
+            if expect_withdraw and not perms.get("ipRestrict"):
+                log.warning("ВНИМАНИЕ: у ключа с правом вывода НЕ включено ограничение по IP. "
+                            "Очень желательно включить белый список адресов вывода на Binance.")
             if not perms.get("enableSpotAndMarginTrading"):
                 raise PermissionError(
                     "У ключа нет права спот-торговли. Включи 'Enable Spot & Margin Trading'."
@@ -103,3 +113,15 @@ class Exchange:
         order = self.client.order_market_sell(symbol=symbol, quantity=qty)
         log.info("SELL исполнен: %s", order.get("orderId"))
         return order
+
+    # ── Вывод средств ──────────────────────────────────────────────────
+    def withdraw(self, asset: str, network: str, address: str, amount: float) -> dict:
+        """Вывод `amount` `asset` на внешний `address` в сети `network`."""
+        if self.dry_run:
+            log.info("[DRY_RUN] WITHDRAW %.2f %s -> %s (%s)", amount, asset, address, network)
+            return {"dry_run": True, "id": "dry-run"}
+        result = self.client.withdraw(
+            coin=asset, network=network, address=address, amount=round(amount, 8)
+        )
+        log.info("Запрос на вывод отправлен: id=%s", result.get("id"))
+        return result
