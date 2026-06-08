@@ -33,6 +33,8 @@ class Config:
     dry_run: bool
     testnet: bool
 
+    strategy: str  # "swing" или "dca"
+
     symbol: str
     interval: str
     trade_quote_amount: float
@@ -46,6 +48,15 @@ class Config:
     rsi_overbought: float
     rsi_oversold: float
 
+    # Параметры DCA-стратегии
+    dca_base_order: float
+    dca_safety_order: float
+    dca_max_safety_orders: int
+    dca_price_deviation_pct: float
+    dca_safety_step_scale: float
+    dca_safety_volume_scale: float
+    dca_take_profit_pct: float
+
     poll_interval_seconds: int
 
     @classmethod
@@ -55,6 +66,7 @@ class Config:
             api_secret=os.getenv("BINANCE_API_SECRET", ""),
             dry_run=_get_bool("DRY_RUN", True),
             testnet=_get_bool("TESTNET", True),
+            strategy=os.getenv("STRATEGY", "dca").lower(),
             symbol=os.getenv("SYMBOL", "BTCUSDT").upper(),
             interval=os.getenv("INTERVAL", "15m"),
             trade_quote_amount=_get_float("TRADE_QUOTE_AMOUNT", 250.0),
@@ -65,18 +77,45 @@ class Config:
             rsi_period=_get_int("RSI_PERIOD", 14),
             rsi_overbought=_get_float("RSI_OVERBOUGHT", 70.0),
             rsi_oversold=_get_float("RSI_OVERSOLD", 30.0),
+            dca_base_order=_get_float("DCA_BASE_ORDER", 30.0),
+            dca_safety_order=_get_float("DCA_SAFETY_ORDER", 30.0),
+            dca_max_safety_orders=_get_int("DCA_MAX_SAFETY_ORDERS", 5),
+            dca_price_deviation_pct=_get_float("DCA_PRICE_DEVIATION_PCT", 2.5),
+            dca_safety_step_scale=_get_float("DCA_SAFETY_STEP_SCALE", 1.0),
+            dca_safety_volume_scale=_get_float("DCA_SAFETY_VOLUME_SCALE", 1.0),
+            dca_take_profit_pct=_get_float("DCA_TAKE_PROFIT_PCT", 3.0),
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
         )
         cfg.validate()
         return cfg
 
     def validate(self) -> None:
+        if self.strategy not in {"swing", "dca"}:
+            raise ValueError("STRATEGY должна быть 'swing' или 'dca'")
         if self.fast_ma >= self.slow_ma:
             raise ValueError("FAST_MA должна быть меньше SLOW_MA")
         if self.trade_quote_amount <= 0:
             raise ValueError("TRADE_QUOTE_AMOUNT должна быть положительной")
+        if self.strategy == "dca":
+            if self.dca_base_order <= 0 or self.dca_safety_order < 0:
+                raise ValueError("DCA_BASE_ORDER должен быть > 0, DCA_SAFETY_ORDER >= 0")
+            if self.max_dca_budget() > self.trade_quote_amount:
+                raise ValueError(
+                    f"Бюджет DCA ({self.max_dca_budget():.2f} USDT) превышает "
+                    f"TRADE_QUOTE_AMOUNT ({self.trade_quote_amount:.2f}). "
+                    "Уменьши размеры ордеров или число safety-ордеров."
+                )
         # Реальные ордера невозможны без ключей.
         if not self.dry_run and (not self.api_key or not self.api_secret):
             raise ValueError(
                 "Для боевой торговли (DRY_RUN=false) нужны BINANCE_API_KEY и BINANCE_API_SECRET"
             )
+
+    def max_dca_budget(self) -> float:
+        """Максимально возможные вложения за один цикл DCA (база + все safety-ордера)."""
+        total = self.dca_base_order
+        size = self.dca_safety_order
+        for _ in range(self.dca_max_safety_orders):
+            total += size
+            size *= self.dca_safety_volume_scale
+        return total

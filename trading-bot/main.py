@@ -5,6 +5,7 @@ import logging
 import sys
 
 from config import Config
+from dca_trader import DcaTrader
 from exchange import Exchange
 from trader import Trader
 
@@ -36,7 +37,8 @@ def main() -> int:
         log.warning("=" * 60)
 
     exchange = Exchange(cfg.api_key, cfg.api_secret, cfg.testnet, cfg.dry_run)
-    trader = Trader(cfg, exchange)
+    trader = DcaTrader(cfg, exchange) if cfg.strategy == "dca" else Trader(cfg, exchange)
+    log.info("Стратегия: %s", cfg.strategy)
 
     try:
         trader.run()

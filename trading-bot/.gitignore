@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 state.json
+dca_state.json
 bot.log
 .venv/
 venv/
