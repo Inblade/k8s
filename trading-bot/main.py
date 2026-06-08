@@ -1,0 +1,49 @@
+"""Точка входа торгового бота для Binance."""
+from __future__ import annotations
+
+import logging
+import sys
+
+from config import Config
+from exchange import Exchange
+from trader import Trader
+
+
+def setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler("bot.log", encoding="utf-8"),
+        ],
+    )
+
+
+def main() -> int:
+    setup_logging()
+    log = logging.getLogger("bot")
+    try:
+        cfg = Config.load()
+    except ValueError as exc:
+        log.error("Ошибка конфигурации: %s", exc)
+        return 1
+
+    if not cfg.dry_run and not cfg.testnet:
+        log.warning("=" * 60)
+        log.warning("ВНИМАНИЕ: РЕАЛЬНАЯ ТОРГОВЛЯ НАСТОЯЩИМИ ДЕНЬГАМИ!")
+        log.warning("DRY_RUN=false и TESTNET=false. Ты рискуешь реальными средствами.")
+        log.warning("=" * 60)
+
+    exchange = Exchange(cfg.api_key, cfg.api_secret, cfg.testnet, cfg.dry_run)
+    trader = Trader(cfg, exchange)
+
+    try:
+        trader.run()
+    except KeyboardInterrupt:
+        log.info("Остановлено пользователем. Открытая позиция (если есть) НЕ закрыта.")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
