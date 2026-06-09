@@ -145,6 +145,13 @@ class Config:
     # столько %. 0 = выключено. Должен быть ШИРЕ суммарного покрытия докупок.
     dca_stop_loss_pct: float = 0.0
 
+    # Трендовый фильтр (Faber): новые циклы открываются только когда цена ВЫШЕ
+    # длинной скользящей средней — не усредняемся в нисходящем тренде. По данным
+    # примерно вдвое снижает максимальную просадку при той же доходности.
+    dca_trend_filter_enabled: bool = False
+    dca_trend_ma_period: int = 200
+    dca_trend_interval: str = "1d"
+
     # ATR-привязка шага/тейк-профита: вместо фиксированных % шаг и цель считаются
     # от недавней волатильности (среднее абсолютное изменение закрытий, %).
     # Работает, только когда адаптивный режим ВЫКЛ. Перекрывает price_deviation/TP.
@@ -235,6 +242,9 @@ class Config:
             dca_atr_tp_mult=_get_float("DCA_ATR_TP_MULT", 1.5),
             dca_atr_min_pct=_get_float("DCA_ATR_MIN_PCT", 0.5),
             dca_atr_max_pct=_get_float("DCA_ATR_MAX_PCT", 8.0),
+            dca_trend_filter_enabled=_get_bool("DCA_TREND_FILTER_ENABLED", False),
+            dca_trend_ma_period=_get_int("DCA_TREND_MA_PERIOD", 200),
+            dca_trend_interval=os.getenv("DCA_TREND_INTERVAL", "1d"),
         )
         cfg.validate()
         return cfg

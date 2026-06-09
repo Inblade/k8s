@@ -331,6 +331,7 @@ document.getElementById('btnSettings').onclick = async ()=>{
     DCA_SAFETY_ORDER:'DCA размер докупки', DCA_MAX_SAFETY_ORDERS:'DCA макс. докупок',
     DCA_PRICE_DEVIATION_PCT:'DCA шаг просадки %', DCA_TAKE_PROFIT_PCT:'DCA тейк-профит %',
     DCA_STOP_LOSS_PCT:'DCA стоп-лосс % (0=выкл)', DCA_ATR_ENABLED:'ATR-привязка шага (true/false)',
+    DCA_TREND_FILTER_ENABLED:'Трендовый фильтр 200-MA (true/false)',
     ADAPTIVE_ENABLED:'Адаптивный режим', POLL_INTERVAL_SECONDS:'Опрос, сек',
     WITHDRAW_ENABLED:'Автовывод вкл', WITHDRAW_PROFIT_PCT:'Вывод % прибыли', WITHDRAW_MIN_AMOUNT:'Вывод от, USDT',
     WITHDRAW_ASSET:'Вывод: монета', WITHDRAW_NETWORK:'Вывод: сеть', WITHDRAW_ADDRESS:'Вывод: адрес',

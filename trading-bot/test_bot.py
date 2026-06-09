@@ -640,6 +640,35 @@ class TestStopLossAndAtr(unittest.TestCase):
         self.assertEqual(t.engines["BBB"].p.price_deviation_pct, before_bbb)
 
 
+class TestTrendFilter(unittest.TestCase):
+    def setUp(self): cleanup()
+    def tearDown(self): cleanup()
+
+    def test_trend_ok_above_below_ma(self):
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["AAA"], dca_trend_filter_enabled=True, dca_trend_ma_period=5)
+        ex = FakeExchange(closes=[100, 100, 100, 100, 100, 100])  # MA(5)=100
+        t = DcaTrader(cfg, ex)
+        self.assertTrue(t._trend_ok("AAA", 105))   # выше MA → ок
+        self.assertFalse(t._trend_ok("AAA", 95))    # ниже MA → блок
+
+    def test_trend_ok_insufficient_data(self):
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["AAA"], dca_trend_filter_enabled=True, dca_trend_ma_period=200)
+        t = DcaTrader(cfg, FakeExchange(closes=[100, 99, 98]))  # мало истории
+        self.assertTrue(t._trend_ok("AAA", 50))     # не блокируем без данных
+
+    def test_trend_filter_blocks_new_entry(self):
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["AAA"], dca_trend_filter_enabled=True, dca_trend_ma_period=5)
+        # цена 90 ниже MA(5)=100 → новый базовый ордер НЕ открывается
+        ex = FakeExchange(price=90, closes=[100, 100, 100, 100, 100, 100])
+        t = DcaTrader(cfg, ex)
+        t.step()
+        self.assertFalse(t.engines["AAA"].state.in_position)  # вход на паузе
+        self.assertEqual(ex.bought, [])
+
+
 class TestStockDefaults(unittest.TestCase):
     def test_stock_defaults_have_stoploss_and_tight_step(self):
         from config import STOCK_DCA_DEFAULTS

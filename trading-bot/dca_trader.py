@@ -12,6 +12,7 @@ from adaptive import AdaptiveController
 from config import Config
 from dca import Action, DcaEngine, DcaParams
 from exchange import Exchange
+from strategy import sma
 from volatility import clamp, mean_abs_change_pct
 from withdrawal import ProfitWithdrawer
 
@@ -180,10 +181,26 @@ class DcaTrader:
                 }
             elif self.cfg.dca_atr_enabled:
                 self._apply_atr_spacing(sym)
+            # Трендовый фильтр: не открываем новые циклы ниже длинной MA.
+            if self.cfg.dca_trend_filter_enabled and not self._trend_ok(sym, prices[sym]):
+                allow = False
             self._process_symbol(sym, prices[sym], allow)
         self._record_equity(prices)
         if self.controller is not None:
             self._write_status(statuses)
+
+    def _trend_ok(self, sym: str, price: float) -> bool:
+        """True, если цена выше длинной MA (восходящий тренд) или данных мало."""
+        c = self.cfg
+        closes = self.ex.get_closes(sym, c.dca_trend_interval, c.dca_trend_ma_period + 5)
+        if len(closes) < c.dca_trend_ma_period:
+            return True  # недостаточно истории — не блокируем
+        ma = sma(closes, c.dca_trend_ma_period)
+        ok = price > ma
+        if not ok:
+            log.info("[%s] Трендовый фильтр: цена %.2f < MA%d %.2f — новые входы на паузе",
+                     sym, price, c.dca_trend_ma_period, ma)
+        return ok
 
     def _apply_atr_spacing(self, sym: str) -> None:
         """Шаг просадки и тейк-профит = волатильность × множитель (с зажимом)."""
