@@ -1,4 +1,4 @@
-"""Точка входа торгового бота для Binance."""
+"""Точка входа торгового бота для Binance (консольный запуск)."""
 from __future__ import annotations
 
 import logging
@@ -10,15 +10,11 @@ from logsetup import setup_logging
 from trader import Trader
 
 
-def main() -> int:
-    setup_logging()
-    log = logging.getLogger("bot")
-    try:
-        cfg = Config.load()
-    except ValueError as exc:
-        log.error("Ошибка конфигурации: %s", exc)
-        return 1
+def create_trader(cfg: Config, log: logging.Logger):
+    """Собирает биржу и трейдер, проверяет ключи. Бросает исключение при проблеме.
 
+    Используется и консольным main(), и приложением app.py.
+    """
     if not cfg.dry_run and not cfg.testnet:
         log.warning("=" * 60)
         log.warning("ВНИМАНИЕ: РЕАЛЬНАЯ ТОРГОВЛЯ НАСТОЯЩИМИ ДЕНЬГАМИ!")
@@ -36,19 +32,26 @@ def main() -> int:
 
     # Проверка ключей и прав доступа до начала торговли.
     if not cfg.dry_run:
-        try:
-            info = exchange.verify_credentials(expect_withdraw=cfg.withdraw_enabled)
-        except Exception as exc:  # noqa: BLE001 — стартовая диагностика
-            log.error("Проверка API-ключей не пройдена: %s", exc)
-            return 1
+        info = exchange.verify_credentials(expect_withdraw=cfg.withdraw_enabled)
         log.info("Ключи OK | canTrade=%s | балансы: %s",
                  info["can_trade"], info["balances"] or "пусто")
         if not info["can_trade"]:
-            log.error("Аккаунт не может торговать (canTrade=false). Проверь права ключа.")
-            return 1
+            raise PermissionError("Аккаунт не может торговать (canTrade=false).")
 
     trader = DcaTrader(cfg, exchange) if cfg.strategy == "dca" else Trader(cfg, exchange)
     log.info("Стратегия: %s", cfg.strategy)
+    return trader
+
+
+def main() -> int:
+    setup_logging()
+    log = logging.getLogger("bot")
+    try:
+        cfg = Config.load()
+        trader = create_trader(cfg, log)
+    except Exception as exc:  # noqa: BLE001 — стартовая диагностика
+        log.error("Не удалось запустить бота: %s", exc)
+        return 1
 
     try:
         trader.run()
