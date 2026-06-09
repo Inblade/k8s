@@ -105,3 +105,51 @@ class DcaEngine:
         # Игнорируем лишние ключи на случай миграции формата.
         known = {f for f in DcaState.__dataclass_fields__}
         return cls(params, DcaState(**{k: v for k, v in data.items() if k in known}))
+
+
+def simulate_dca(closes: list[float], params: DcaParams, start_cash: float,
+                 fee_pct: float = 0.1) -> dict:
+    """Прогон DCA по списку цен. Возвращает метрики для бэктеста/оптимизатора.
+
+    Метрики: final (итоговый капитал), pnl_pct, cycles, wins, max_drawdown_pct.
+    Капитал считается как свободные деньги + стоимость открытой позиции, поэтому
+    кривая отражает и просадку по незакрытой позиции.
+    """
+    engine = DcaEngine(params)
+    cash = start_cash
+    cycles = 0
+    wins = 0
+    peak = start_cash
+    max_dd = 0.0
+
+    for price in closes:
+        order = engine.decide(price)
+        if order is not None:
+            if order.action == Action.BUY:
+                spend = min(order.quote, cash)
+                if spend > 0:
+                    qty = (spend * (1 - fee_pct / 100)) / price
+                    cash -= spend
+                    engine.apply_buy(price, spend, qty)
+            elif order.action == Action.SELL_ALL:
+                s = engine.state
+                cash += s.qty * price * (1 - fee_pct / 100)
+                cycles += 1
+                if price > s.avg_entry:
+                    wins += 1
+                engine.apply_sell_all()
+        # Отслеживаем просадку по полному капиталу (кэш + позиция).
+        equity = cash + engine.state.qty * price
+        peak = max(peak, equity)
+        if peak > 0:
+            max_dd = max(max_dd, (peak - equity) / peak * 100)
+
+    final = cash + engine.state.qty * (closes[-1] if closes else 0)
+    return {
+        "final": final,
+        "pnl_pct": (final / start_cash - 1) * 100 if start_cash else 0.0,
+        "cycles": cycles,
+        "wins": wins,
+        "max_drawdown_pct": max_dd,
+    }
+

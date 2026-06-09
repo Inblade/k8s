@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from flask import Flask, jsonify, render_template_string
 
 import journal
@@ -52,6 +54,7 @@ PAGE = """
 </header>
 <div id="hint" style="display:none; margin:0 24px; padding:12px 16px; background:#3a2a00; border:1px solid #6b4f00; border-radius:8px; color:#e3b341;"></div>
 <div class="cards" id="cards"></div>
+<div id="regime" style="padding:0 24px 8px;"></div>
 <div class="grid">
   <div class="panel full"><h2>Кривая капитала (equity)</h2><canvas id="equityChart" height="90"></canvas></div>
   <div class="panel full"><h2>Цена и сделки</h2><canvas id="priceChart" height="90"></canvas></div>
@@ -72,6 +75,18 @@ async function load(){
     hint.textContent = '⏳ Данных пока нет. Запущен ли бот (python main.py) в этой же папке? '
       + 'График заполнится после первого опроса рынка (см. POLL_INTERVAL_SECONDS).';
   } else { hint.style.display = 'none'; }
+  // адаптивный режим рынка
+  const reg = document.getElementById('regime');
+  if(d.status && d.status.adaptive){
+    const color = {'тренд вверх':'#3fb950','тренд вниз':'#f85149','боковик':'#8b949e'};
+    reg.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">'
+      + '<span style="color:#8b949e;font-size:12px">Адаптивный режим:</span>'
+      + Object.entries(d.status.symbols).map(([s,v])=>
+          `<span style="background:#161b22;border:1px solid #222;border-radius:8px;padding:6px 10px;font-size:12px">
+           <b>${s}</b> · <span style="color:${color[v.regime]||'#8b949e'}">${v.regime}</span>
+           · TP ${v.take_profit_pct}% · входы: ${v.allow_new_entry?'да':'⏸ пауза'}</span>`).join('')
+      + '</div>';
+  } else { reg.innerHTML = ''; }
   // карточки
   const c = d.summary;
   document.getElementById('cards').innerHTML = `
@@ -158,8 +173,16 @@ def data():
         "trades": sells,
         "wins": wins,
     }
+    status = {}
+    status_file = journal.DIR / "status.json"
+    if status_file.exists():
+        try:
+            status = json.loads(status_file.read_text())
+        except (ValueError, OSError):
+            status = {}
     # Не перегружаем график: максимум последние 1000 точек.
-    return jsonify({"summary": summary, "equity": equity[-1000:], "trades": trades[-200:]})
+    return jsonify({"summary": summary, "equity": equity[-1000:],
+                    "trades": trades[-200:], "status": status})
 
 
 if __name__ == "__main__":

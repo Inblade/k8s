@@ -5,6 +5,8 @@ state.json
 dca_state.json
 dca_state_*.json
 withdraw_state.json
+adaptive_state.json
+status.json
 trades.csv
 equity.csv
 *.bak

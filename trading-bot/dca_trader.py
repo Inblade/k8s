@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import journal
+from adaptive import AdaptiveController
 from config import Config
 from dca import Action, DcaEngine, DcaParams
 from exchange import Exchange
@@ -15,6 +16,7 @@ from withdrawal import ProfitWithdrawer
 log = logging.getLogger("bot.dca")
 
 DIR = Path(__file__).parent
+STATUS_FILE = DIR / "status.json"
 
 
 def params_from_config(cfg: Config) -> DcaParams:
@@ -47,14 +49,19 @@ class DcaTrader:
             else:
                 self.engines[sym] = DcaEngine(params)
         self.withdrawer = ProfitWithdrawer(cfg, exchange)
+        self.controller = AdaptiveController(cfg, exchange) if cfg.adaptive_enabled else None
 
     def _save(self, symbol: str) -> None:
         _state_file(symbol).write_text(json.dumps(self.engines[symbol].state_dict()))
 
     # ── Обработка одной монеты ─────────────────────────────────────────
-    def _process_symbol(self, symbol: str, price: float) -> None:
+    def _process_symbol(self, symbol: str, price: float, allow_new_entry: bool = True) -> None:
         engine = self.engines[symbol]
         s = engine.state
+        if not s.in_position and not allow_new_entry:
+            log.info("[%s] Цена=%.2f вход на паузе (режим рынка не благоприятен)",
+                     symbol, price)
+            return
         if s.in_position:
             log.info("[%s] Цена=%.2f средняя=%.2f объём=%.8f safety=%d/%d след.докупка<=%.2f",
                      symbol, price, s.avg_entry, s.qty, s.safety_filled,
@@ -108,12 +115,43 @@ class DcaTrader:
             reserve=self.withdrawer.state.reserve,
         )
 
+    def _write_status(self, statuses: dict) -> None:
+        from datetime import datetime, timezone
+        STATUS_FILE.write_text(json.dumps({
+            "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "adaptive": True,
+            "symbols": statuses,
+        }))
+
     def step(self) -> None:
         # Цены берём один раз за шаг, чтобы не дёргать API повторно.
         prices = {sym: self.ex.get_price(sym) for sym in self.cfg.symbols}
+        statuses: dict = {}
         for sym in self.cfg.symbols:
-            self._process_symbol(sym, prices[sym])
+            allow = True
+            if self.controller is not None:
+                closes = self.ex.get_closes(sym, self.cfg.regime_interval,
+                                            self.cfg.regime_lookback)
+                decision = self.controller.update(sym, closes)
+                self.engines[sym].p = decision.params  # применяем адаптацию
+                allow = decision.allow_new_entry
+                info = decision.info
+                log.info("[%s] Режим: %s (наклон %.2f%%, волат. %.2f%%) | TP=%.1f%% | входы: %s",
+                         sym, info.regime.value, info.slope_pct, info.volatility_pct,
+                         decision.params.take_profit_pct, "да" if allow else "ПАУЗА")
+                statuses[sym] = {
+                    "regime": info.regime.value,
+                    "slope_pct": round(info.slope_pct, 2),
+                    "volatility_pct": round(info.volatility_pct, 2),
+                    "take_profit_pct": round(decision.params.take_profit_pct, 2),
+                    "deviation_pct": round(decision.params.price_deviation_pct, 2),
+                    "max_safety": decision.params.max_safety_orders,
+                    "allow_new_entry": allow,
+                }
+            self._process_symbol(sym, prices[sym], allow)
         self._record_equity(prices)
+        if self.controller is not None:
+            self._write_status(statuses)
 
     def run(self) -> None:
         log.info(
@@ -125,6 +163,11 @@ class DcaTrader:
             self.cfg.dca_take_profit_pct, self.cfg.max_dca_budget(),
             self.cfg.max_dca_budget() * len(self.cfg.symbols),
         )
+        if self.controller is not None:
+            log.info("Адаптивный режим ВКЛ: определение тренда/боковика на %s + "
+                     "оптимизация параметров каждые %d шагов (optimize=%s)",
+                     self.cfg.regime_interval, self.cfg.reoptimize_every,
+                     self.cfg.adaptive_optimize)
         while True:
             try:
                 self.step()

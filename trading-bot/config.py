@@ -80,6 +80,16 @@ class Config:
     # Веб-дашборд
     dashboard_port: int
 
+    # Адаптивный режим: смена поведения под рынок + оптимизация параметров
+    adaptive_enabled: bool
+    adaptive_optimize: bool
+    regime_interval: str
+    regime_lookback: int
+    reoptimize_every: int
+    trend_tp_multiplier: float
+    regime_slope_pct: float
+    regime_high_vol_pct: float
+
     poll_interval_seconds: int
 
     @classmethod
@@ -115,6 +125,14 @@ class Config:
             withdraw_network=os.getenv("WITHDRAW_NETWORK", "TRX").upper(),
             withdraw_address=os.getenv("WITHDRAW_ADDRESS", "").strip(),
             dashboard_port=_get_int("DASHBOARD_PORT", 8000),
+            adaptive_enabled=_get_bool("ADAPTIVE_ENABLED", False),
+            adaptive_optimize=_get_bool("ADAPTIVE_OPTIMIZE", True),
+            regime_interval=os.getenv("REGIME_INTERVAL", "1h"),
+            regime_lookback=_get_int("REGIME_LOOKBACK", 500),
+            reoptimize_every=_get_int("REOPTIMIZE_EVERY", 50),
+            trend_tp_multiplier=_get_float("TREND_TP_MULTIPLIER", 1.5),
+            regime_slope_pct=_get_float("REGIME_SLOPE_PCT", 0.6),
+            regime_high_vol_pct=_get_float("REGIME_HIGH_VOL_PCT", 2.5),
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
         )
         cfg.validate()
@@ -156,6 +174,8 @@ class Config:
             raise ValueError(
                 "WITHDRAW_ENABLED=true, но не задан WITHDRAW_ADDRESS (адрес кошелька)"
             )
+        if self.reoptimize_every <= 0:
+            raise ValueError("REOPTIMIZE_EVERY должен быть > 0")
 
     def max_dca_budget(self) -> float:
         """Максимально возможные вложения за один цикл DCA (база + все safety-ордера)."""
