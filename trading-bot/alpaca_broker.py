@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_DOWN, Decimal
 
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -61,9 +63,27 @@ class AlpacaBroker:
                    "d": TimeFrameUnit.Day, "w": TimeFrameUnit.Week}
         return TimeFrame(num, mapping.get(unit, TimeFrameUnit.Hour))
 
+    @staticmethod
+    def _start_for(interval: str, limit: int) -> datetime:
+        """Дата начала окна, чтобы вернулось ~limit баров (с запасом на выходные/
+        праздники). Без start Alpaca отдаёт почти пустой ответ."""
+        interval = interval.strip().lower()
+        num = int("".join(c for c in interval if c.isdigit()) or "1")
+        unit = interval[-1]
+        if unit == "d":
+            days = limit * 1.7
+        elif unit == "w":
+            days = limit * 7 + 14
+        elif unit == "h":
+            days = (limit / 6.5) * 1.7          # ~6.5 торговых часов в день
+        else:                                    # минуты
+            days = (limit / (390 / num)) * 1.7   # 390 торговых минут в день
+        return datetime.now(timezone.utc) - timedelta(days=int(days) + 10)
+
     def get_closes(self, symbol: str, interval: str, limit: int) -> list[float]:
         req = StockBarsRequest(symbol_or_symbols=symbol,
-                               timeframe=self._timeframe(interval), limit=limit)
+                               timeframe=self._timeframe(interval), limit=limit,
+                               start=self._start_for(interval, limit), feed=DataFeed.IEX)
         bars = self._dc.get_stock_bars(req)
         return [float(b.close) for b in bars.data.get(symbol, [])]
 
