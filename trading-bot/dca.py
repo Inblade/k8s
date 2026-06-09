@@ -33,6 +33,7 @@ class DcaParams:
     safety_step_scale: float
     safety_volume_scale: float
     take_profit_pct: float
+    stop_loss_pct: float = 0.0  # выход из цикла при просадке ниже средней; 0 = выкл
 
 
 @dataclass
@@ -73,6 +74,10 @@ class DcaEngine:
         # Тейк-профит имеет приоритет.
         if price >= s.avg_entry * (1 + p.take_profit_pct / 100):
             return Order(Action.SELL_ALL, reason=f"тейк-профит {p.take_profit_pct}%")
+
+        # Стоп-лосс на цикл: режем убыток, если цена ушла слишком глубоко вниз.
+        if p.stop_loss_pct > 0 and price <= s.avg_entry * (1 - p.stop_loss_pct / 100):
+            return Order(Action.SELL_ALL, reason=f"стоп-лосс {p.stop_loss_pct:g}%")
 
         # Safety-ордер при достаточной просадке.
         if s.safety_filled < p.max_safety_orders and price <= s.next_safety_price:

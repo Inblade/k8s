@@ -41,6 +41,7 @@ def base_params(cfg: Config) -> DcaParams:
         safety_step_scale=cfg.dca_safety_step_scale,
         safety_volume_scale=cfg.dca_safety_volume_scale,
         take_profit_pct=cfg.dca_take_profit_pct,
+        stop_loss_pct=cfg.dca_stop_loss_pct,  # сохраняем стоп-лосс и в адаптиве
     )
 
 

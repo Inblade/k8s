@@ -330,6 +330,7 @@ document.getElementById('btnSettings').onclick = async ()=>{
     INTERVAL:'Таймфрейм', TRADE_QUOTE_AMOUNT:'Бюджет, USDT', DCA_BASE_ORDER:'DCA базовый ордер',
     DCA_SAFETY_ORDER:'DCA размер докупки', DCA_MAX_SAFETY_ORDERS:'DCA макс. докупок',
     DCA_PRICE_DEVIATION_PCT:'DCA шаг просадки %', DCA_TAKE_PROFIT_PCT:'DCA тейк-профит %',
+    DCA_STOP_LOSS_PCT:'DCA стоп-лосс % (0=выкл)', DCA_ATR_ENABLED:'ATR-привязка шага (true/false)',
     ADAPTIVE_ENABLED:'Адаптивный режим', POLL_INTERVAL_SECONDS:'Опрос, сек',
     WITHDRAW_ENABLED:'Автовывод вкл', WITHDRAW_PROFIT_PCT:'Вывод % прибыли', WITHDRAW_MIN_AMOUNT:'Вывод от, USDT',
     WITHDRAW_ASSET:'Вывод: монета', WITHDRAW_NETWORK:'Вывод: сеть', WITHDRAW_ADDRESS:'Вывод: адрес',
@@ -340,7 +341,8 @@ document.getElementById('btnSettings').onclick = async ()=>{
     ALPACA_SYMBOLS:'Тикеры акций через запятую (AAPL,MSFT)', ALPACA_TRADE_QUOTE_AMOUNT:'Бюджет акций, USD',
     ALPACA_DCA_BASE_ORDER:'Акции: базовый ордер (пусто=$50)',
     ALPACA_DCA_SAFETY_ORDER:'Акции: размер докупки (пусто=$50)', ALPACA_DCA_MAX_SAFETY_ORDERS:'Акции: макс. докупок (пусто=4)',
-    ALPACA_DCA_PRICE_DEVIATION_PCT:'Акции: шаг просадки % (пусто=2)', ALPACA_DCA_TAKE_PROFIT_PCT:'Акции: тейк-профит % (пусто=2)',
+    ALPACA_DCA_PRICE_DEVIATION_PCT:'Акции: шаг просадки % (пусто=1.5)', ALPACA_DCA_TAKE_PROFIT_PCT:'Акции: тейк-профит % (пусто=2)',
+    ALPACA_DCA_STOP_LOSS_PCT:'Акции: стоп-лосс % (пусто=12)',
     APCA_API_KEY_ID:'Alpaca API Key ID', APCA_API_SECRET_KEY:'Alpaca API Secret'};
   document.getElementById('settingsForm').innerHTML = Object.keys(s).map(k=>
     `<div class="field"><label>${labels[k]||k}</label><input data-k="${k}" value="${s[k]||''}"></div>`).join('');

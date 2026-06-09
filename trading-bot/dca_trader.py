@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import journal
@@ -11,6 +12,7 @@ from adaptive import AdaptiveController
 from config import Config
 from dca import Action, DcaEngine, DcaParams
 from exchange import Exchange
+from volatility import clamp, mean_abs_change_pct
 from withdrawal import ProfitWithdrawer
 
 log = logging.getLogger("bot.dca")
@@ -28,6 +30,7 @@ def params_from_config(cfg: Config) -> DcaParams:
         safety_step_scale=cfg.dca_safety_step_scale,
         safety_volume_scale=cfg.dca_safety_volume_scale,
         take_profit_pct=cfg.dca_take_profit_pct,
+        stop_loss_pct=cfg.dca_stop_loss_pct,
     )
 
 
@@ -41,6 +44,10 @@ class DcaTrader:
         self.ex = exchange
         self.source = source  # метка брокера для журнала/графиков
         params = params_from_config(cfg)
+        if 0 < params.stop_loss_pct <= params.price_deviation_pct:
+            log.warning("Стоп-лосс %.2f%% не шире шага докупки %.2f%% — сработает ДО "
+                        "усреднения. Сделай стоп-лосс заметно шире покрытия докупок.",
+                        params.stop_loss_pct, params.price_deviation_pct)
         # Отдельный движок и файл состояния на каждую монету.
         self.engines: dict[str, DcaEngine] = {}
         for sym in cfg.symbols:
@@ -171,10 +178,27 @@ class DcaTrader:
                     "max_safety": decision.params.max_safety_orders,
                     "allow_new_entry": allow,
                 }
+            elif self.cfg.dca_atr_enabled:
+                self._apply_atr_spacing(sym)
             self._process_symbol(sym, prices[sym], allow)
         self._record_equity(prices)
         if self.controller is not None:
             self._write_status(statuses)
+
+    def _apply_atr_spacing(self, sym: str) -> None:
+        """Шаг просадки и тейк-профит = волатильность × множитель (с зажимом)."""
+        c = self.cfg
+        closes = self.ex.get_closes(sym, c.interval, c.dca_atr_period + 1)
+        vol = mean_abs_change_pct(closes, c.dca_atr_period)
+        if vol <= 0:
+            return  # нет данных — оставляем текущие параметры
+        dev = clamp(vol * c.dca_atr_step_mult, c.dca_atr_min_pct, c.dca_atr_max_pct)
+        tp = clamp(vol * c.dca_atr_tp_mult, c.dca_atr_min_pct, c.dca_atr_max_pct)
+        # Заменяем параметры НОВЫМ объектом (движки делят один DcaParams!).
+        self.engines[sym].p = replace(self.engines[sym].p,
+                                      price_deviation_pct=dev, take_profit_pct=tp)
+        log.info("[%s] ATR-привязка: волат.=%.2f%% → шаг=%.2f%% TP=%.2f%%",
+                 sym, vol, dev, tp)
 
     # ── Управление из панели ───────────────────────────────────────────
     def snapshot(self) -> list[dict]:

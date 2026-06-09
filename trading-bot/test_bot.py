@@ -558,6 +558,82 @@ class TestSourceTagging(unittest.TestCase):
         self.assertTrue(equity and all(r["source"] == "alpaca" for r in equity))
 
 
+# ─────────────────────────── стоп-лосс + ATR-привязка ───────────────────────────
+class TestStopLossAndAtr(unittest.TestCase):
+    def setUp(self): cleanup()
+    def tearDown(self): cleanup()
+
+    def test_stop_loss_triggers_below_avg(self):
+        p = DcaParams(base_order=50, safety_order=50, max_safety_orders=4,
+                      price_deviation_pct=1.5, safety_step_scale=1.0,
+                      safety_volume_scale=1.0, take_profit_pct=2.0, stop_loss_pct=10.0)
+        e = DcaEngine(p)
+        e.apply_buy(100.0, 50.0, 0.5)             # средняя ~100
+        self.assertIsNone(e.decide(99.0))          # −1% — рано
+        order = e.decide(89.0)                      # −11% — стоп
+        self.assertIsNotNone(order)
+        self.assertEqual(order.action, Action.SELL_ALL)
+        self.assertIn("стоп-лосс", order.reason)
+
+    def test_stop_loss_off_by_default(self):
+        p = DcaParams(base_order=50, safety_order=50, max_safety_orders=0,
+                      price_deviation_pct=1.5, safety_step_scale=1.0,
+                      safety_volume_scale=1.0, take_profit_pct=2.0)  # stop_loss=0
+        e = DcaEngine(p)
+        e.apply_buy(100.0, 50.0, 0.5)
+        self.assertIsNone(e.decide(50.0))          # −50%, но стоп выключен
+
+    def test_simulate_dca_stop_loss_cuts_vs_holds(self):
+        # Безоткатное падение: без стоп-лосса бот держит позицию (0 циклов),
+        # со стоп-лоссом — режет и закрывает хотя бы один цикл.
+        closes = [100 - i for i in range(60)]
+        base = dict(base_order=50, safety_order=50, max_safety_orders=3,
+                    price_deviation_pct=2.0, safety_step_scale=1.0, safety_volume_scale=1.0,
+                    take_profit_pct=2.0)
+        no_sl = simulate_dca(closes, DcaParams(**base, stop_loss_pct=0.0), 1000.0, fee_pct=0.0)
+        with_sl = simulate_dca(closes, DcaParams(**base, stop_loss_pct=10.0), 1000.0, fee_pct=0.0)
+        self.assertEqual(no_sl["cycles"], 0)        # держит «мешок» до конца
+        self.assertGreaterEqual(with_sl["cycles"], 1)  # стоп-лосс закрыл цикл
+
+    def test_adaptive_keeps_stop_loss(self):
+        # адаптивный режим заменяет params — стоп-лосс не должен теряться
+        from adaptive import base_params
+        cfg = make_cfg(symbols=["BTCUSDT"], dca_stop_loss_pct=8.0)
+        self.assertEqual(base_params(cfg).stop_loss_pct, 8.0)
+
+    def test_mean_abs_change_pct(self):
+        from volatility import mean_abs_change_pct, clamp
+        self.assertEqual(mean_abs_change_pct([100], 14), 0.0)
+        # ровно +1%/−1% чередуются → среднее |изменение| = 1%
+        seq = [100, 101, 99.99, 100.99, 99.98]
+        self.assertAlmostEqual(mean_abs_change_pct(seq, 14), 1.0, places=1)
+        self.assertEqual(clamp(10, 0.5, 8.0), 8.0)
+        self.assertEqual(clamp(0.1, 0.5, 8.0), 0.5)
+
+    def test_atr_spacing_per_symbol_no_shared_mutation(self):
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["AAA", "BBB"], dca_atr_enabled=True,
+                       dca_atr_step_mult=1.0, dca_atr_tp_mult=2.0)
+        ex = FakeExchange(closes=[100, 103, 100, 103, 100, 103])  # ~3% волатильность
+        t = DcaTrader(cfg, ex, source="alpaca")
+        before_bbb = t.engines["BBB"].p.price_deviation_pct
+        t._apply_atr_spacing("AAA")
+        self.assertNotEqual(t.engines["AAA"].p.price_deviation_pct, before_bbb)
+        # BBB не должен измениться (нет общей мутации одного DcaParams)
+        self.assertEqual(t.engines["BBB"].p.price_deviation_pct, before_bbb)
+
+
+class TestStockDefaults(unittest.TestCase):
+    def test_stock_defaults_have_stoploss_and_tight_step(self):
+        from config import STOCK_DCA_DEFAULTS
+        cfg = dataclasses.replace(make_cfg(symbols=["BTCUSDT"]),
+                                  alpaca_api_key="k", alpaca_api_secret="s")
+        a = cfg.for_alpaca()
+        self.assertEqual(a.symbols, ["SPY", "QQQ"])  # безопасные ETF по умолчанию
+        self.assertEqual(a.dca_stop_loss_pct, STOCK_DCA_DEFAULTS["stop_loss_pct"])
+        self.assertEqual(a.dca_price_deviation_pct, 1.5)
+
+
 # ─────────────────────────── overview + бэктест ───────────────────────────
 class TestOverviewAndBacktest(unittest.TestCase):
     def setUp(self): cleanup()
