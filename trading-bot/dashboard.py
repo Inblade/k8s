@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template_string, request
 
@@ -89,8 +90,11 @@ PAGE = """
   <aside class="sidebar">
     <h3>Брокеры и режим</h3>
     <div id="brokers"><div class="muted">—</div></div>
+    <h3>Итоги по брокерам</h3>
+    <div id="overview"><div class="muted">—</div></div>
     <h3>Действия</h3>
     <button class="btn" id="btnSettings">⚙ Настройки</button>
+    <button class="btn" id="btnBacktest">📊 Бэктест акций</button>
     <button class="btn" id="btnDeposit">⬇ Пополнить счёт</button>
     <button class="btn danger" id="btnFlatten">✕ Закрыть все позиции</button>
     <h3>Позиции</h3>
@@ -119,6 +123,22 @@ PAGE = """
       <button class="btn primary" id="settingsSave" style="width:auto">Сохранить и перезапустить</button>
       <button class="btn" id="settingsCancel" style="width:auto">Отмена</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay" id="backtestOverlay">
+  <div class="modal">
+    <h2>📊 Бэктест акций (Alpaca)</h2>
+    <div class="muted" style="margin-bottom:10px">Прогон текущих DCA-параметров брокера по историческим барам. Помогает подобрать шаг/тейк-профит до запуска.</div>
+    <div class="row2">
+      <div class="field"><label>Тикер</label><input id="btSymbol" value="AAPL"></div>
+      <div class="field"><label>Таймфрейм</label>
+        <select id="btInterval"><option>1d</option><option>1h</option><option>15m</option></select></div>
+    </div>
+    <div class="field"><label>Сколько баров (история)</label><input id="btLimit" value="365"></div>
+    <button class="btn primary" id="btRun" style="width:auto">Запустить</button>
+    <div id="btResult" style="margin-top:14px"></div>
+    <button class="btn" id="btClose" style="width:auto; margin-top:12px">Закрыть</button>
   </div>
 </div>
 
@@ -182,6 +202,7 @@ async function load(){
   const c = d.summary;
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Капитал (equity)</div><div class="value">${money(c.equity)}</div></div>
+    <div class="card"><div class="label">P&L за сегодня</div><div class="value ${cls(c.day_pnl||0)}">${money(c.day_pnl||0)}</div></div>
     <div class="card"><div class="label">Реализованная прибыль</div><div class="value ${cls(c.realized)}">${money(c.realized)}</div></div>
     <div class="card"><div class="label">Нереализованная</div><div class="value ${cls(c.unrealized)}">${money(c.unrealized)}</div></div>
     <div class="card"><div class="label">Сделок / прибыльных</div><div class="value">${c.trades} / ${c.wins}</div></div>
@@ -253,6 +274,14 @@ async function loadControl(){
   document.getElementById('brokers').innerHTML = html || '<div class="muted">нет активных брокеров</div>';
   unitsCache = units;
   renderTabs();
+
+  const ov = await (await fetch('/api/overview')).json();
+  document.getElementById('overview').innerHTML = (ov||[]).length ? ov.map(o=>{
+    const d=+o.day_pnl, u=+o.unrealized;
+    return `<div class="pos-item"><b>${BROKER_NAME[o.source]||o.source}</b>
+      <div class="muted" style="margin:4px 0">капитал ${money(o.equity)} · нереал. <span class="${u>=0?'pos':'neg'}">${u>=0?'+':''}${u.toFixed(2)}$</span></div>
+      сегодня <span class="${d>=0?'pos':'neg'}">${d>=0?'+':''}${d.toFixed(2)}$</span></div>`;
+  }).join('') : '<div class="muted">нет данных</div>';
 
   const p = await (await fetch('/api/positions')).json();
   document.getElementById('positions').innerHTML = (p.positions||[]).map(x=>{
@@ -327,6 +356,31 @@ document.getElementById('settingsSave').onclick = async ()=>{
   sOverlay.classList.remove('show'); loadControl();
 };
 
+// Бэктест акций
+const btOverlay = document.getElementById('backtestOverlay');
+document.getElementById('btnBacktest').onclick = ()=>{
+  const alp = unitsCache.find(u=>u.name==='alpaca');
+  if(alp && alp.symbols && alp.symbols.length) document.getElementById('btSymbol').value = alp.symbols[0];
+  document.getElementById('btResult').innerHTML = '';
+  btOverlay.classList.add('show');
+};
+document.getElementById('btClose').onclick = ()=> btOverlay.classList.remove('show');
+document.getElementById('btRun').onclick = async ()=>{
+  const sym = document.getElementById('btSymbol').value.trim().toUpperCase();
+  const itv = document.getElementById('btInterval').value;
+  const lim = document.getElementById('btLimit').value;
+  const res = document.getElementById('btResult');
+  res.innerHTML = '<div class="muted">считаю…</div>';
+  const r = await (await fetch(`/api/backtest?source=alpaca&symbol=${sym}&interval=${itv}&limit=${lim}`)).json();
+  if(r.error){ res.innerHTML = `<div class="muted">⚠ ${r.error}</div>`; return; }
+  const pc = r.pnl_pct>=0?'pos':'neg';
+  res.innerHTML = `<div class="pos-item">
+    <b>${r.symbol}</b> · ${r.interval} · ${r.bars} баров<br>
+    старт $${(+r.start_cash).toFixed(0)} → итог $${(+r.final).toFixed(2)}<br>
+    доходность: <span class="${pc}">${r.pnl_pct>=0?'+':''}${(+r.pnl_pct).toFixed(2)}%</span><br>
+    циклов: ${r.cycles} · прибыльных: ${r.wins} · макс. просадка: ${(+r.max_drawdown_pct).toFixed(1)}%</div>`;
+};
+
 // Пополнение
 const dOverlay = document.getElementById('depositOverlay');
 document.getElementById('btnDeposit').onclick = ()=> dOverlay.classList.add('show');
@@ -367,6 +421,50 @@ def _f(value, default=0.0) -> float:
         return default
 
 
+def _day_pnl(equity_rows: list) -> float:
+    """Изменение капитала за сегодня (UTC): последний − первый снимок дня."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    rows = [r for r in equity_rows if (r.get("time") or "")[:10] == today]
+    if len(rows) < 2:
+        return 0.0
+    return round(_f(rows[-1].get("equity")) - _f(rows[0].get("equity")), 2)
+
+
+@app.route("/api/overview")
+def overview():
+    """Сводка по каждому брокеру: капитал, реализованная/нереализованная, P&L за день."""
+    eq = journal.read_csv(journal.EQUITY_CSV)
+    sources = sorted({(r.get("source") or "binance") for r in eq})
+    out = []
+    for s in sources:
+        rows = [r for r in eq if (r.get("source") or "binance") == s]
+        if not rows:
+            continue
+        last = rows[-1]
+        out.append({
+            "source": s,
+            "equity": _f(last.get("equity")),
+            "realized": _f(last.get("realized_pnl")),
+            "unrealized": _f(last.get("unrealized_pnl")),
+            "day_pnl": _day_pnl(rows),
+        })
+    return jsonify(out)
+
+
+@app.route("/api/backtest")
+def backtest():
+    source = request.args.get("source", "alpaca")
+    symbol = request.args.get("symbol", "").upper()
+    interval = request.args.get("interval", "1d")
+    try:
+        limit = max(2, min(int(request.args.get("limit", 365)), 1000))
+    except ValueError:
+        limit = 365
+    if not symbol:
+        return jsonify({"error": "не задан символ"})
+    return jsonify(manager.backtest(source, symbol, interval, limit))
+
+
 @app.route("/api/data")
 def data():
     # Данные разнесены по брокерам колонкой source (старые строки без неё = binance).
@@ -388,6 +486,7 @@ def data():
         "reserve": _f(last.get("reserve")),
         "trades": sells,
         "wins": wins,
+        "day_pnl": _day_pnl(equity),
     }
     status = {}
     status_file = journal.DIR / ("status.json" if source == "binance" else f"status_{source}.json")

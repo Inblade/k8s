@@ -558,6 +558,44 @@ class TestSourceTagging(unittest.TestCase):
         self.assertTrue(equity and all(r["source"] == "alpaca" for r in equity))
 
 
+# ─────────────────────────── overview + бэктест ───────────────────────────
+class TestOverviewAndBacktest(unittest.TestCase):
+    def setUp(self): cleanup()
+    def tearDown(self): cleanup()
+
+    def test_overview_and_day_pnl(self):
+        import dashboard
+        journal.record_equity(100, 0, 0, 0, 0, 1000.0, 0, 0, source="binance")
+        journal.record_equity(100, 0, 0, 5, 0, 1010.0, 0, 0, source="binance")
+        journal.record_equity(150, 0, 0, 0, 0, 2000.0, 0, 0, source="alpaca")
+        c = dashboard.app.test_client()
+        ov = {o["source"]: o for o in c.get("/api/overview").get_json()}
+        self.assertEqual(ov["binance"]["equity"], 1010.0)
+        self.assertEqual(ov["binance"]["day_pnl"], 10.0)
+        self.assertEqual(ov["alpaca"]["equity"], 2000.0)
+        d = c.get("/api/data?source=binance").get_json()
+        self.assertEqual(d["summary"]["day_pnl"], 10.0)
+
+    def test_backtest_via_manager(self):
+        import threading
+        from manager import BotManager, Unit
+        from dca_trader import DcaTrader
+        prices = [100 - i * 0.5 for i in range(40)] + [80 + i for i in range(40)]
+        ex = FakeExchange(closes=prices, dry_run=False)
+        trader = DcaTrader(make_cfg(symbols=["AAPL"], dca_take_profit_pct=2.0), ex, source="alpaca")
+        m = BotManager()
+        m.units = [Unit("alpaca", trader, threading.Thread(target=lambda: None), threading.Event())]
+        r = m.backtest("alpaca", "AAPL", "1d", 80)
+        self.assertNotIn("error", r)
+        self.assertEqual(r["symbol"], "AAPL")
+        self.assertEqual(r["bars"], len(prices))
+        self.assertIn("pnl_pct", r)
+
+    def test_backtest_no_broker(self):
+        from manager import BotManager
+        self.assertIn("error", BotManager().backtest("alpaca", "AAPL", "1d", 80))
+
+
 # ─────────────────────────── manager (без сети) ───────────────────────────
 class TestManager(unittest.TestCase):
     def test_fresh_info(self):

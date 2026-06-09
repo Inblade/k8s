@@ -182,6 +182,27 @@ class BotManager:
                 log.error("Ордера (%s) недоступны: %s", u.name, exc)
         return out
 
+    def backtest(self, source: str, symbol: str, interval: str, limit: int) -> dict:
+        """Прогон DCA-стратегии брокера по историческим барам символа."""
+        from dca import simulate_dca
+        from dca_trader import params_from_config
+        with self._lock:
+            unit = self._unit(source)
+        if unit is None:
+            return {"error": f"брокер {source} не запущен"}
+        try:
+            closes = unit.trader.ex.get_closes(symbol, interval, limit)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"не удалось получить бары: {exc}"}
+        if len(closes) < 2:
+            return {"error": "недостаточно исторических данных"}
+        cfg = unit.trader.cfg
+        res = simulate_dca(closes, params_from_config(cfg),
+                           cfg.trade_quote_amount, cfg.fee_pct)
+        res.update({"symbol": symbol, "interval": interval, "bars": len(closes),
+                    "start_cash": cfg.trade_quote_amount})
+        return res
+
     def deposit_address(self, coin: str, network: str | None) -> dict:
         with self._lock:
             unit = self._unit("binance")
