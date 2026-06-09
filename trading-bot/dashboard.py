@@ -157,19 +157,27 @@ def index():
     )
 
 
+def _f(value, default=0.0) -> float:
+    """Безопасное преобразование в float (CSV могли дописывать в момент чтения)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @app.route("/api/data")
 def data():
     equity = journal.read_csv(journal.EQUITY_CSV)
     trades = journal.read_csv(journal.TRADES_CSV)
     last = equity[-1] if equity else {}
-    wins = sum(1 for t in trades if t["side"] == "SELL" and float(t["realized_pnl"]) > 0)
-    sells = sum(1 for t in trades if t["side"] == "SELL")
+    wins = sum(1 for t in trades if t.get("side") == "SELL" and _f(t.get("realized_pnl")) > 0)
+    sells = sum(1 for t in trades if t.get("side") == "SELL")
     summary = {
-        "equity": float(last.get("equity", cfg.trade_quote_amount)),
-        "realized": float(last.get("realized_pnl", 0)),
-        "unrealized": float(last.get("unrealized_pnl", 0)),
-        "withdrawn": float(last.get("withdrawn", 0)),
-        "reserve": float(last.get("reserve", 0)),
+        "equity": _f(last.get("equity"), cfg.trade_quote_amount),
+        "realized": _f(last.get("realized_pnl")),
+        "unrealized": _f(last.get("unrealized_pnl")),
+        "withdrawn": _f(last.get("withdrawn")),
+        "reserve": _f(last.get("reserve")),
         "trades": sells,
         "wins": wins,
     }

@@ -15,7 +15,19 @@ class Exchange:
         self.testnet = testnet
         # Для DRY_RUN без ключей всё равно нужен клиент для чтения свечей (публичные данные).
         self.client = Client(api_key or None, api_secret or None, testnet=testnet)
-        self._filters_cache: dict[str, dict] = {}
+        self._info_cache: dict[str, dict] = {}
+
+    # ── Информация о паре (фильтры, базовая валюта) ───────────────────
+    def _symbol_info(self, symbol: str) -> dict:
+        if symbol not in self._info_cache:
+            self._info_cache[symbol] = self.client.get_symbol_info(symbol)
+        return self._info_cache[symbol]
+
+    def _symbol_filters(self, symbol: str) -> dict:
+        return {f["filterType"]: f for f in self._symbol_info(symbol)["filters"]}
+
+    def base_asset(self, symbol: str) -> str:
+        return self._symbol_info(symbol)["baseAsset"]
 
     # ── Проверка доступа при старте ────────────────────────────────────
     def verify_credentials(self, expect_withdraw: bool = False) -> dict:
@@ -70,13 +82,6 @@ class Exchange:
         bal = self.client.get_asset_balance(asset=asset)
         return float(bal["free"]) if bal else 0.0
 
-    # ── Биржевые фильтры (минимальный лот, шаг и т.п.) ────────────────
-    def _symbol_filters(self, symbol: str) -> dict:
-        if symbol not in self._filters_cache:
-            info = self.client.get_symbol_info(symbol)
-            self._filters_cache[symbol] = {f["filterType"]: f for f in info["filters"]}
-        return self._filters_cache[symbol]
-
     def round_qty(self, symbol: str, qty: float) -> float:
         """Округляет количество вниз до шага LOT_SIZE."""
         step = Decimal(self._symbol_filters(symbol)["LOT_SIZE"]["stepSize"])
@@ -105,11 +110,18 @@ class Exchange:
 
     def market_sell_qty(self, symbol: str, qty: float) -> dict:
         """Продажа по рынку количества `qty` базовой валюты (BTC)."""
-        qty = self.round_qty(symbol, qty)
         if self.dry_run:
             price = self.get_price(symbol)
+            qty = self.round_qty(symbol, qty)
             log.info("[DRY_RUN] SELL %s кол-во %.8f (по цене %.2f)", symbol, qty, price)
             return {"dry_run": True, "side": "SELL", "price": price, "qty": qty}
+        # Из-за комиссии в монете реальный баланс может быть чуть меньше учтённого —
+        # продаём не больше, чем реально есть на споте, иначе ордер отклонят.
+        free = self.get_free_balance(self.base_asset(symbol))
+        qty = self.round_qty(symbol, min(qty, free))
+        if qty <= 0:
+            log.warning("SELL %s пропущен: нечего продавать (баланс %.8f)", symbol, free)
+            return {"skipped": True, "qty": 0.0}
         order = self.client.order_market_sell(symbol=symbol, quantity=qty)
         log.info("SELL исполнен: %s", order.get("orderId"))
         return order
