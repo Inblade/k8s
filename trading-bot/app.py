@@ -16,19 +16,7 @@ from werkzeug.serving import make_server
 
 import dashboard
 from logsetup import setup_logging
-from main import create_trader
-
-
-def _run_bot(cfg, log: logging.Logger) -> None:
-    try:
-        trader = create_trader(cfg, log)
-    except Exception as exc:  # noqa: BLE001 — показываем причину в логе/окне
-        log.error("Бот не запущен: %s", exc)
-        return
-    try:
-        trader.run()
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Бот остановлен из-за ошибки: %s", exc)
+from manager import instance as manager
 
 
 def main() -> None:
@@ -37,8 +25,8 @@ def main() -> None:
     cfg = dashboard.cfg
     url = f"http://127.0.0.1:{cfg.dashboard_port}"
 
-    # 1) Бот в фоне.
-    threading.Thread(target=_run_bot, args=(cfg, log), daemon=True).start()
+    # 1) Бот под управлением менеджера (можно переключать режим/настройки из окна).
+    manager.start()
 
     # 2) Веб-сервер дашборда в фоне (без dev-перезагрузчика).
     server = make_server("127.0.0.1", cfg.dashboard_port, dashboard.app)

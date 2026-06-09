@@ -166,7 +166,49 @@ class DcaTrader:
         if self.controller is not None:
             self._write_status(statuses)
 
-    def run(self) -> None:
+    # ── Управление из панели ───────────────────────────────────────────
+    def snapshot(self) -> list[dict]:
+        """Текущие позиции по монетам — для боковой панели/окна сделки."""
+        out = []
+        for sym, e in self.engines.items():
+            s = e.state
+            price = self.ex.get_price(sym)
+            out.append({
+                "symbol": sym,
+                "in_position": s.in_position,
+                "qty": s.qty,
+                "avg_entry": s.avg_entry,
+                "spent": s.spent,
+                "price": price,
+                "unrealized": (s.qty * price - s.spent) if s.in_position else 0.0,
+                "safety_filled": s.safety_filled,
+                "take_profit_pct": e.p.take_profit_pct,
+                "tp_price": s.avg_entry * (1 + e.p.take_profit_pct / 100) if s.in_position else 0.0,
+            })
+        return out
+
+    def close_all_positions(self) -> int:
+        """Закрывает все открытые позиции в рынок. Возвращает число закрытых."""
+        closed = 0
+        for sym, e in self.engines.items():
+            s = e.state
+            if not s.in_position:
+                continue
+            price = self.ex.get_price(sym)
+            proceeds = s.qty * price * (1 - self.cfg.fee_pct / 100)
+            realized = proceeds - s.spent
+            self.ex.market_sell_qty(sym, s.qty)
+            log.info("[%s] Закрытие позиции вручную: %.8f по ~%.2f | P&L=%.2f USDT",
+                     sym, s.qty, price, realized)
+            journal.record_trade(sym, "SELL", "ручное закрытие", price, s.qty,
+                                 proceeds, s.avg_entry, realized)
+            e.apply_sell_all()
+            self._save(sym)
+            self.withdrawer.on_realized_profit(realized)
+            closed += 1
+        return closed
+
+    def run(self, stop_event=None) -> None:
         log.info(
             "Старт DCA | монеты: %s | DRY_RUN=%s TESTNET=%s | база=%.0f safety=%.0f x%d "
             "дев=%.1f%% TP=%.1f%% | бюджет/монета=%.0f, всего=%.0f USDT",
@@ -181,9 +223,15 @@ class DcaTrader:
                      "оптимизация параметров каждые %d шагов (optimize=%s)",
                      self.cfg.regime_interval, self.cfg.reoptimize_every,
                      self.cfg.adaptive_optimize)
-        while True:
+        while stop_event is None or not stop_event.is_set():
             try:
                 self.step()
             except Exception as exc:  # noqa: BLE001 — бот не должен падать из-за разовой ошибки
                 log.exception("Ошибка в цикле DCA: %s", exc)
-            time.sleep(self.cfg.poll_interval_seconds)
+            # Сон, прерываемый остановкой.
+            if stop_event is not None:
+                if stop_event.wait(self.cfg.poll_interval_seconds):
+                    break
+            else:
+                time.sleep(self.cfg.poll_interval_seconds)
+        log.info("DCA остановлен.")

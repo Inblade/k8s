@@ -26,6 +26,20 @@ def _get_int(name: str, default: int) -> int:
     return int(val) if val not in (None, "") else default
 
 
+def _resolve_keys(testnet: bool) -> tuple[str, str]:
+    """Возвращает (api_key, api_secret) под нужную сеть.
+
+    Боевые ключи: BINANCE_API_KEY / BINANCE_API_SECRET.
+    Тестовые:     BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET
+                  (если пустые — откат на BINANCE_API_KEY для совместимости).
+    """
+    if testnet:
+        key = os.getenv("BINANCE_TESTNET_API_KEY") or os.getenv("BINANCE_API_KEY", "")
+        sec = os.getenv("BINANCE_TESTNET_API_SECRET") or os.getenv("BINANCE_API_SECRET", "")
+        return key, sec
+    return os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", "")
+
+
 def _get_symbols() -> list[str]:
     """Список пар. SYMBOLS (через запятую) имеет приоритет над SYMBOL."""
     raw = os.getenv("SYMBOLS") or os.getenv("SYMBOL") or "BTCUSDT"
@@ -94,11 +108,13 @@ class Config:
 
     @classmethod
     def load(cls) -> "Config":
+        testnet = _get_bool("TESTNET", True)
+        api_key, api_secret = _resolve_keys(testnet)
         cfg = cls(
-            api_key=os.getenv("BINANCE_API_KEY", ""),
-            api_secret=os.getenv("BINANCE_API_SECRET", ""),
+            api_key=api_key,
+            api_secret=api_secret,
             dry_run=_get_bool("DRY_RUN", True),
-            testnet=_get_bool("TESTNET", True),
+            testnet=testnet,
             strategy=os.getenv("STRATEGY", "dca").lower(),
             symbols=_get_symbols(),
             interval=os.getenv("INTERVAL", "15m"),

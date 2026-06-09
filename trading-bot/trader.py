@@ -108,16 +108,45 @@ class Trader:
         # Для реальных ордеров Binance возвращает executedQty.
         return float(order.get("executedQty", 0.0))
 
+    # ── Управление из панели ───────────────────────────────────────────
+    def snapshot(self) -> list[dict]:
+        price = self.ex.get_price(self.cfg.symbol)
+        p = self.position
+        return [{
+            "symbol": self.cfg.symbol,
+            "in_position": p.is_open,
+            "qty": p.qty,
+            "avg_entry": p.entry_price,
+            "spent": p.qty * p.entry_price,
+            "price": price,
+            "unrealized": (price - p.entry_price) * p.qty if p.is_open else 0.0,
+            "safety_filled": 0,
+            "take_profit_pct": self.cfg.take_profit_pct,
+            "tp_price": p.entry_price * (1 + self.cfg.take_profit_pct / 100) if p.is_open else 0.0,
+        }]
+
+    def close_all_positions(self) -> int:
+        if not self.position.is_open:
+            return 0
+        price = self.ex.get_price(self.cfg.symbol)
+        self._exit("ручное закрытие", price)
+        return 1
+
     # ── Запуск ─────────────────────────────────────────────────────────
-    def run(self) -> None:
+    def run(self, stop_event=None) -> None:
         log.info(
             "Старт бота | %s %s | DRY_RUN=%s TESTNET=%s | сумма сделки=%.2f USDT",
             self.cfg.symbol, self.cfg.interval, self.ex.dry_run, self.ex.testnet,
             self.cfg.trade_quote_amount,
         )
-        while True:
+        while stop_event is None or not stop_event.is_set():
             try:
                 self.step()
             except Exception as exc:  # noqa: BLE001 — бот не должен падать из-за разовой ошибки
                 log.exception("Ошибка в цикле: %s", exc)
-            time.sleep(self.cfg.poll_interval_seconds)
+            if stop_event is not None:
+                if stop_event.wait(self.cfg.poll_interval_seconds):
+                    break
+            else:
+                time.sleep(self.cfg.poll_interval_seconds)
+        log.info("Бот остановлен.")

@@ -85,6 +85,26 @@ class Exchange:
         bal = self.client.get_asset_balance(asset=asset)
         return float(bal["free"]) if bal else 0.0
 
+    def balances(self) -> dict[str, float]:
+        """Все ненулевые свободные балансы {актив: количество}."""
+        if self.dry_run:
+            return {}
+        acct = self.client.get_account()
+        return {b["asset"]: float(b["free"]) for b in acct.get("balances", [])
+                if float(b["free"]) > 0}
+
+    def open_orders(self, symbol: str | None = None) -> list[dict]:
+        if self.dry_run:
+            return []
+        return self.client.get_open_orders(symbol=symbol) if symbol \
+            else self.client.get_open_orders()
+
+    def deposit_address(self, coin: str, network: str | None = None) -> dict:
+        """Адрес для пополнения. На testnet/dry недоступно."""
+        if self.dry_run or self.testnet:
+            return {"address": "", "note": "Адрес депозита доступен только в боевом режиме"}
+        return self.client.get_deposit_address(coin=coin, network=network)
+
     def round_qty(self, symbol: str, qty: float) -> float:
         """Округляет количество вниз до шага LOT_SIZE."""
         step = Decimal(self._symbol_filters(symbol)["LOT_SIZE"]["stepSize"])

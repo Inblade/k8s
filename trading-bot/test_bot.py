@@ -338,6 +338,11 @@ class DummyClient:
     def get_asset_balance(self, asset): return {"free": self._free}
     def order_market_buy(self, **k): return {"orderId": 1, **k}
     def order_market_sell(self, **k): self.sell_qty = k.get("quantity"); return {"orderId": 2, **k}
+    def get_open_orders(self, symbol=None):
+        return [{"symbol": "BTCUSDT", "side": "BUY", "type": "LIMIT",
+                 "price": "60000", "origQty": "0.001"}]
+    def get_deposit_address(self, coin, network=None):
+        return {"address": "TDepositAddr123", "tag": "", "coin": coin}
 
 
 class TestExchange(unittest.TestCase):
@@ -382,6 +387,15 @@ class TestExchange(unittest.TestCase):
         ex = self._mk(dry_run=True, testnet=True)
         self.assertTrue(ex.market_buy_quote("BTCUSDT", 30)["dry_run"])
         self.assertTrue(ex.withdraw("USDT", "TRX", "addr", 5)["dry_run"])
+
+    def test_balances_and_orders(self):
+        ex = self._mk()
+        self.assertIn("USDT", ex.balances())
+        self.assertEqual(ex.open_orders()[0]["symbol"], "BTCUSDT")
+
+    def test_deposit_address_live_vs_dry(self):
+        self.assertEqual(self._mk().deposit_address("USDT", "TRX")["address"], "TDepositAddr123")
+        self.assertEqual(self._mk(dry_run=True, testnet=True).deposit_address("USDT")["address"], "")
 
 
 # ─────────────────────────── DcaTrader интеграция ───────────────────────────
@@ -433,6 +447,110 @@ class TestDcaTrader(unittest.TestCase):
         last = journal.read_csv(journal.EQUITY_CSV)[-1]
         # equity = бюджет + realized + unrealized; сразу после покупки ~ бюджет
         self.assertAlmostEqual(float(last["equity"]), 250.0, delta=1.0)
+
+
+# ─────────────────────────── ключи под режим ───────────────────────────
+class TestConfigKeys(unittest.TestCase):
+    def test_testnet_uses_testnet_keys(self):
+        env = {"TESTNET": "true", "DRY_RUN": "false", "STRATEGY": "dca",
+               "SYMBOL": "BTCUSDT", "TRADE_QUOTE_AMOUNT": "1000",
+               "BINANCE_TESTNET_API_KEY": "tk", "BINANCE_TESTNET_API_SECRET": "ts",
+               "BINANCE_API_KEY": "lk", "BINANCE_API_SECRET": "ls",
+               "WITHDRAW_ENABLED": "false"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            cfg = Config.load()
+        self.assertEqual((cfg.api_key, cfg.api_secret), ("tk", "ts"))
+
+    def test_live_uses_main_keys(self):
+        env = {"TESTNET": "false", "DRY_RUN": "false", "STRATEGY": "dca",
+               "SYMBOL": "BTCUSDT", "TRADE_QUOTE_AMOUNT": "1000",
+               "BINANCE_TESTNET_API_KEY": "tk", "BINANCE_TESTNET_API_SECRET": "ts",
+               "BINANCE_API_KEY": "lk", "BINANCE_API_SECRET": "ls",
+               "WITHDRAW_ENABLED": "false"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            cfg = Config.load()
+        self.assertEqual((cfg.api_key, cfg.api_secret), ("lk", "ls"))
+
+    def test_testnet_fallback_to_main(self):
+        env = {"TESTNET": "true", "DRY_RUN": "false", "STRATEGY": "dca",
+               "SYMBOL": "BTCUSDT", "TRADE_QUOTE_AMOUNT": "1000",
+               "BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_API_SECRET": "",
+               "BINANCE_API_KEY": "lk", "BINANCE_API_SECRET": "ls",
+               "WITHDRAW_ENABLED": "false"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            cfg = Config.load()
+        self.assertEqual(cfg.api_key, "lk")
+
+
+# ─────────────────────────── settings_store ───────────────────────────
+class TestSettingsStore(unittest.TestCase):
+    def setUp(self):
+        import settings_store
+        import tempfile
+        self.ss = settings_store
+        self.tmp = Path(tempfile.mkdtemp()) / ".env"
+        self.tmp.write_text("BINANCE_API_SECRET=supersecretvalue\nSTRATEGY=dca\n")
+        self._orig = settings_store.ENV_PATH
+        settings_store.ENV_PATH = self.tmp
+
+    def tearDown(self):
+        self.ss.ENV_PATH = self._orig
+
+    def test_secret_masked_on_read(self):
+        s = self.ss.read_settings()
+        self.assertTrue(s["BINANCE_API_SECRET"].startswith(self.ss.MASK))
+        self.assertTrue(s["BINANCE_API_SECRET"].endswith("alue"))
+        self.assertEqual(s["STRATEGY"], "dca")
+
+    def test_save_skips_masked_secret(self):
+        # передаём замаскированное значение — секрет не должен перезаписаться
+        self.ss.save_settings({"BINANCE_API_SECRET": self.ss.MASK + "alue", "STRATEGY": "swing"})
+        from dotenv import dotenv_values
+        v = dotenv_values(self.tmp)
+        self.assertEqual(v["BINANCE_API_SECRET"], "supersecretvalue")  # не тронут
+        self.assertEqual(v["STRATEGY"], "swing")                       # изменён
+
+    def test_save_real_secret(self):
+        self.ss.save_settings({"BINANCE_API_SECRET": "newrealsecret"})
+        from dotenv import dotenv_values
+        self.assertEqual(dotenv_values(self.tmp)["BINANCE_API_SECRET"], "newrealsecret")
+
+
+# ─────────────────────────── DCA: управление позициями ───────────────────────────
+class TestDcaControl(unittest.TestCase):
+    def setUp(self): cleanup()
+    def tearDown(self): cleanup()
+
+    def test_snapshot_and_close(self):
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["BTCUSDT"])
+        ex = FakeExchange()
+        t = DcaTrader(cfg, ex)
+        ex.set_price(100); t.step()                    # открыли позицию
+        snap = t.snapshot()
+        self.assertTrue(snap[0]["in_position"])
+        self.assertAlmostEqual(snap[0]["avg_entry"], 100, delta=0.1)
+        closed = t.close_all_positions()
+        self.assertEqual(closed, 1)
+        self.assertFalse(t.snapshot()[0]["in_position"])
+        sells = [r for r in journal.read_csv(journal.TRADES_CSV)
+                 if r["side"] == "SELL" and r["reason"] == "ручное закрытие"]
+        self.assertEqual(len(sells), 1)
+
+
+# ─────────────────────────── manager (без сети) ───────────────────────────
+class TestManager(unittest.TestCase):
+    def test_fresh_info(self):
+        from manager import BotManager
+        m = BotManager()
+        info = m.info()
+        self.assertFalse(info["running"])
+        self.assertEqual(info["mode"], "—")
+
+    def test_switch_mode_invalid(self):
+        from manager import BotManager
+        r = BotManager().switch_mode("nonsense")
+        self.assertFalse(r["ok"])
 
 
 # ─────────────────────────── swing (смоук) ───────────────────────────

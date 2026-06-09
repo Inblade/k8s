@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
 import journal
+import settings_store
 from config import Config
+from manager import instance as manager
 
 app = Flask(__name__)
 cfg = Config.load()
@@ -45,6 +47,37 @@ PAGE = """
   th { color:#8b949e; font-weight:500; }
   .full { grid-column: 1 / -1; }
   @media (max-width: 900px){ .grid { grid-template-columns:1fr; } }
+  /* раскладка с боковой панелью */
+  .layout { display:flex; align-items:flex-start; }
+  .sidebar { width:240px; flex:0 0 240px; background:#11161d; border-right:1px solid #222;
+             min-height:100vh; padding:16px 14px; box-sizing:border-box; }
+  .content { flex:1; min-width:0; }
+  .sidebar h3 { font-size:12px; color:#8b949e; text-transform:uppercase; margin:18px 0 8px; }
+  .btn { display:block; width:100%; box-sizing:border-box; text-align:left; cursor:pointer;
+         background:#1c2530; color:#e6e6e6; border:1px solid #2a3441; border-radius:8px;
+         padding:9px 12px; font-size:13px; margin-bottom:8px; }
+  .btn:hover { background:#243040; }
+  .btn.primary { background:#1f6feb; border-color:#1f6feb; }
+  .btn.danger { background:#5a1e1e; border-color:#7a2a2a; }
+  .modeBadge { padding:6px 10px; border-radius:8px; font-weight:600; font-size:13px; text-align:center; }
+  .m-dry { background:#27313d; color:#8b949e; }
+  .m-test { background:#1d3a26; color:#3fb950; }
+  .m-live { background:#5a1e1e; color:#ff7b72; }
+  .pos-item { background:#161b22; border:1px solid #222; border-radius:8px; padding:8px 10px;
+              font-size:12px; margin-bottom:8px; }
+  /* модальные окна */
+  .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50;
+             align-items:center; justify-content:center; }
+  .overlay.show { display:flex; }
+  .modal { background:#161b22; border:1px solid #2a3441; border-radius:12px; padding:20px;
+           width:520px; max-width:92vw; max-height:88vh; overflow:auto; }
+  .modal h2 { margin:0 0 14px; font-size:16px; }
+  .field { margin-bottom:10px; }
+  .field label { display:block; font-size:12px; color:#8b949e; margin-bottom:4px; }
+  .field input, .field select { width:100%; box-sizing:border-box; background:#0e1117;
+           border:1px solid #2a3441; border-radius:7px; color:#e6e6e6; padding:8px; font-size:13px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .muted { color:#8b949e; font-size:12px; }
 </style>
 </head>
 <body>
@@ -52,13 +85,55 @@ PAGE = """
   <h1>🤖 Trading Bot — дашборд</h1>
   <div class="sub">{{ symbols }} · стратегия {{ strategy }} · режим {{ mode }} · обновляется автоматически</div>
 </header>
-<div id="hint" style="display:none; margin:0 24px; padding:12px 16px; background:#3a2a00; border:1px solid #6b4f00; border-radius:8px; color:#e3b341;"></div>
-<div class="cards" id="cards"></div>
-<div id="regime" style="padding:0 24px 8px;"></div>
-<div class="grid">
-  <div class="panel full"><h2>Кривая капитала (equity)</h2><canvas id="equityChart" height="90"></canvas></div>
-  <div class="panel full"><h2>Цена и сделки</h2><canvas id="priceChart" height="90"></canvas></div>
-  <div class="panel full"><h2>Журнал сделок (последние 50)</h2><div id="trades"></div></div>
+<div class="layout">
+  <aside class="sidebar">
+    <h3>Режим</h3>
+    <div id="modeBadge" class="modeBadge m-dry">—</div>
+    <button class="btn" id="btnMode" style="margin-top:8px">Переключить режим</button>
+    <h3>Действия</h3>
+    <button class="btn" id="btnSettings">⚙ Настройки</button>
+    <button class="btn" id="btnDeposit">⬇ Пополнить счёт</button>
+    <button class="btn danger" id="btnFlatten">✕ Закрыть все позиции</button>
+    <h3>Позиции</h3>
+    <div id="positions"><div class="muted">—</div></div>
+  </aside>
+  <main class="content">
+    <div id="hint" style="display:none; margin:16px 24px 0; padding:12px 16px; background:#3a2a00; border:1px solid #6b4f00; border-radius:8px; color:#e3b341;"></div>
+    <div class="cards" id="cards"></div>
+    <div id="regime" style="padding:0 24px 8px;"></div>
+    <div class="grid">
+      <div class="panel full"><h2>Кривая капитала (equity)</h2><canvas id="equityChart" height="90"></canvas></div>
+      <div class="panel full"><h2>Цена и сделки</h2><canvas id="priceChart" height="90"></canvas></div>
+      <div class="panel full"><h2>Открытые ордера на бирже</h2><div id="orders"><div class="muted">—</div></div></div>
+      <div class="panel full"><h2>Журнал сделок (последние 50)</h2><div id="trades"></div></div>
+    </div>
+  </main>
+</div>
+
+<div class="overlay" id="settingsOverlay">
+  <div class="modal">
+    <h2>⚙ Настройки</h2>
+    <div id="settingsForm"></div>
+    <div class="muted" style="margin:8px 0">Секреты показаны как ••••xxxx. Оставь как есть, чтобы не менять.</div>
+    <div style="display:flex; gap:10px; margin-top:12px">
+      <button class="btn primary" id="settingsSave" style="width:auto">Сохранить и перезапустить</button>
+      <button class="btn" id="settingsCancel" style="width:auto">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="depositOverlay">
+  <div class="modal">
+    <h2>⬇ Пополнить счёт</h2>
+    <div class="row2">
+      <div class="field"><label>Монета</label><input id="depCoin" value="USDT"></div>
+      <div class="field"><label>Сеть</label><input id="depNetwork" value="TRX" placeholder="TRX, BSC, ETH…"></div>
+    </div>
+    <button class="btn primary" id="depGet" style="width:auto">Показать адрес</button>
+    <div id="depResult" style="margin-top:14px"></div>
+    <div class="muted" style="margin-top:10px">Перевод делаешь сам из своего кошелька. Сеть отправки и приёма должны совпадать! Фиат (карта/банк) — на сайте Binance.</div>
+    <button class="btn" id="depClose" style="width:auto; margin-top:12px">Закрыть</button>
+  </div>
 </div>
 <script>
 const PRIMARY = "{{ symbol }}";
@@ -141,7 +216,98 @@ async function load(){
   document.getElementById('trades').innerHTML =
     `<table><thead><tr><th>Время</th><th>Монета</th><th>Сторона</th><th>Причина</th><th>Цена</th><th>Кол-во</th><th>Сумма</th><th>P&L</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
-load(); setInterval(load, 15000);
+
+// ── Панель управления ──────────────────────────────────────────────
+const MODE_LABEL = {dry:'DRY-RUN (симуляция)', test:'TESTNET (тест)', live:'РЕАЛЬНЫЙ (боевой)', '—':'—'};
+async function loadControl(){
+  const info = await (await fetch('/api/control')).json();
+  const b = document.getElementById('modeBadge');
+  b.className = 'modeBadge m-' + (info.mode==='—'?'dry':info.mode);
+  b.textContent = MODE_LABEL[info.mode] + (info.running?'':' · стоп');
+  if(info.error){ b.textContent += ' ⚠'; b.title = info.error; }
+
+  const p = await (await fetch('/api/positions')).json();
+  document.getElementById('positions').innerHTML = (p.positions||[]).map(x=>{
+    if(!x.in_position) return `<div class="pos-item"><b>${x.symbol}</b> · вне позиции<br><span class="muted">цена ${(+x.price).toFixed(2)}</span></div>`;
+    const u = +x.unrealized;
+    return `<div class="pos-item"><b>${x.symbol}</b> · ${(+x.qty).toFixed(6)}<br>
+      вход ${(+x.avg_entry).toFixed(2)} · цена ${(+x.price).toFixed(2)}<br>
+      <span class="${u>=0?'pos':'neg'}">${u>=0?'+':''}${u.toFixed(2)}$</span> · TP ${(+x.tp_price).toFixed(2)} · докупок ${x.safety_filled}</div>`;
+  }).join('') || '<div class="muted">нет данных</div>';
+
+  const orders = p.orders||[];
+  document.getElementById('orders').innerHTML = orders.length
+    ? `<table><thead><tr><th>Пара</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th></tr></thead><tbody>`
+      + orders.map(o=>`<tr><td>${o.symbol}</td><td>${o.side}</td><td>${o.type}</td><td>${o.price}</td><td>${o.origQty}</td></tr>`).join('')
+      + `</tbody></table>`
+    : '<div class="muted">нет открытых ордеров (или режим dry/testnet)</div>';
+}
+
+// Переключение режима
+document.getElementById('btnMode').onclick = async ()=>{
+  const info = await (await fetch('/api/control')).json();
+  const target = info.mode==='live' ? 'test' : 'live';
+  let msg = target==='live'
+    ? 'Перейти в РЕАЛЬНЫЙ режим? Ордера будут идти настоящими деньгами!'
+    : 'Перейти в TESTNET? Открытые боевые позиции будут ЗАКРЫТЫ (проданы в рынок).';
+  if(!confirm(msg)) return;
+  const r = await (await fetch('/api/mode', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target})})).json();
+  alert(r.ok ? ('Режим: '+(MODE_LABEL[r.mode]||r.mode)+(r.closed?` · закрыто позиций: ${r.closed}`:'')) : ('Ошибка: '+r.error));
+  loadControl();
+};
+
+// Закрыть все позиции
+document.getElementById('btnFlatten').onclick = async ()=>{
+  if(!confirm('Закрыть все открытые позиции в рынок?')) return;
+  const r = await (await fetch('/api/flatten', {method:'POST'})).json();
+  alert('Закрыто позиций: '+r.closed); loadControl();
+};
+
+// Настройки
+const sOverlay = document.getElementById('settingsOverlay');
+document.getElementById('btnSettings').onclick = async ()=>{
+  const s = await (await fetch('/api/settings')).json();
+  const labels = {STRATEGY:'Стратегия (dca/swing)', SYMBOLS:'Монеты через запятую', SYMBOL:'Монета (если одна)',
+    INTERVAL:'Таймфрейм', TRADE_QUOTE_AMOUNT:'Бюджет, USDT', DCA_BASE_ORDER:'DCA базовый ордер',
+    DCA_SAFETY_ORDER:'DCA размер докупки', DCA_MAX_SAFETY_ORDERS:'DCA макс. докупок',
+    DCA_PRICE_DEVIATION_PCT:'DCA шаг просадки %', DCA_TAKE_PROFIT_PCT:'DCA тейк-профит %',
+    ADAPTIVE_ENABLED:'Адаптивный режим', POLL_INTERVAL_SECONDS:'Опрос, сек',
+    WITHDRAW_ENABLED:'Автовывод вкл', WITHDRAW_PROFIT_PCT:'Вывод % прибыли', WITHDRAW_MIN_AMOUNT:'Вывод от, USDT',
+    WITHDRAW_ASSET:'Вывод: монета', WITHDRAW_NETWORK:'Вывод: сеть', WITHDRAW_ADDRESS:'Вывод: адрес',
+    BINANCE_API_KEY:'Боевой API Key', BINANCE_API_SECRET:'Боевой API Secret',
+    BINANCE_TESTNET_API_KEY:'Testnet API Key', BINANCE_TESTNET_API_SECRET:'Testnet API Secret'};
+  document.getElementById('settingsForm').innerHTML = Object.keys(s).map(k=>
+    `<div class="field"><label>${labels[k]||k}</label><input data-k="${k}" value="${s[k]||''}"></div>`).join('');
+  sOverlay.classList.add('show');
+};
+document.getElementById('settingsCancel').onclick = ()=> sOverlay.classList.remove('show');
+document.getElementById('settingsSave').onclick = async ()=>{
+  const vals = {};
+  document.querySelectorAll('#settingsForm input').forEach(i=> vals[i.dataset.k]=i.value);
+  const r = await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(vals)})).json();
+  alert(r.ok ? ('Сохранено и перезапущено. Изменено: '+(r.changed.join(', ')||'—')+(r.error?(' ⚠ '+r.error):'')) : 'Ошибка');
+  sOverlay.classList.remove('show'); loadControl();
+};
+
+// Пополнение
+const dOverlay = document.getElementById('depositOverlay');
+document.getElementById('btnDeposit').onclick = ()=> dOverlay.classList.add('show');
+document.getElementById('depClose').onclick = ()=> dOverlay.classList.remove('show');
+document.getElementById('depGet').onclick = async ()=>{
+  const coin = document.getElementById('depCoin').value.trim().toUpperCase();
+  const net = document.getElementById('depNetwork').value.trim().toUpperCase();
+  const r = await (await fetch(`/api/deposit_address?coin=${coin}&network=${net}`)).json();
+  document.getElementById('depResult').innerHTML = r.address
+    ? `<div class="field"><label>Адрес (${coin}/${net})</label><input value="${r.address}" readonly onclick="this.select()"></div>`
+      + (r.tag?`<div class="muted">MEMO/TAG: ${r.tag}</div>`:'')
+    : `<div class="muted">${r.note||'адрес недоступен'}</div>`;
+};
+
+load(); loadControl();
+setInterval(load, 15000);
+setInterval(loadControl, 15000);
 </script>
 </body>
 </html>
@@ -191,6 +357,47 @@ def data():
     # Не перегружаем график: максимум последние 1000 точек.
     return jsonify({"summary": summary, "equity": equity[-1000:],
                     "trades": trades[-200:], "status": status})
+
+
+# ── Control API (управление из окна) ──────────────────────────────────
+@app.route("/api/control")
+def control_info():
+    return jsonify(manager.info())
+
+
+@app.route("/api/positions")
+def positions():
+    return jsonify({"positions": manager.positions(), "orders": manager.open_orders()})
+
+
+@app.route("/api/balances")
+def balances():
+    return jsonify(manager.balances())
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def settings():
+    if request.method == "GET":
+        return jsonify(settings_store.read_settings())
+    return jsonify(manager.apply_settings(request.get_json(force=True) or {}))
+
+
+@app.route("/api/mode", methods=["POST"])
+def mode():
+    target = (request.get_json(force=True) or {}).get("target")
+    return jsonify(manager.switch_mode(target))
+
+
+@app.route("/api/flatten", methods=["POST"])
+def flatten():
+    return jsonify({"closed": manager.flatten()})
+
+
+@app.route("/api/deposit_address")
+def deposit_address():
+    coin = request.args.get("coin", "USDT")
+    network = request.args.get("network") or None
+    return jsonify(manager.deposit_address(coin, network))
 
 
 if __name__ == "__main__":
