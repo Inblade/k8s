@@ -658,8 +658,9 @@ class TestOverviewAndBacktest(unittest.TestCase):
 
     def test_overview_and_day_pnl(self):
         import dashboard
+        # день P&L = изменение (реализ.+нереализ.), НЕ зависит от прыжка бюджета
         journal.record_equity(100, 0, 0, 0, 0, 1000.0, 0, 0, source="binance")
-        journal.record_equity(100, 0, 0, 5, 0, 1010.0, 0, 0, source="binance")
+        journal.record_equity(100, 0, 0, 10, 0, 1010.0, 0, 0, source="binance")
         journal.record_equity(150, 0, 0, 0, 0, 2000.0, 0, 0, source="alpaca")
         c = dashboard.app.test_client()
         ov = {o["source"]: o for o in c.get("/api/overview").get_json()}
@@ -668,6 +669,16 @@ class TestOverviewAndBacktest(unittest.TestCase):
         self.assertEqual(ov["alpaca"]["equity"], 2000.0)
         d = c.get("/api/data?source=binance").get_json()
         self.assertEqual(d["summary"]["day_pnl"], 10.0)
+
+    def test_day_pnl_ignores_budget_jump(self):
+        # equity прыгает 1000→250 (смена бюджета), но P&L-компоненты почти не
+        # изменились → день P&L должен быть ~0, а не −750
+        import dashboard
+        journal.record_equity(100, 0, 0, -0.5, 0, 1000.0, 0, 0, source="alpaca")
+        journal.record_equity(100, 0, 0, -0.8, 0, 250.0, 0, 0, source="alpaca")
+        c = dashboard.app.test_client()
+        ov = {o["source"]: o for o in c.get("/api/overview").get_json()}
+        self.assertAlmostEqual(ov["alpaca"]["day_pnl"], -0.3, places=2)
 
     def test_backtest_via_manager(self):
         import threading

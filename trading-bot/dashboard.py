@@ -424,12 +424,18 @@ def _f(value, default=0.0) -> float:
 
 
 def _day_pnl(equity_rows: list) -> float:
-    """Изменение капитала за сегодня (UTC): последний − первый снимок дня."""
+    """P&L за сегодня (UTC) = изменение (реализованная+нереализованная) за день.
+
+    Считаем по компонентам P&L, а НЕ по equity: equity включает базовый бюджет,
+    который при смене настроек прыгает и иначе давал бы ложный «убыток».
+    """
     today = datetime.now(timezone.utc).date().isoformat()
     rows = [r for r in equity_rows if (r.get("time") or "")[:10] == today]
     if len(rows) < 2:
         return 0.0
-    return round(_f(rows[-1].get("equity")) - _f(rows[0].get("equity")), 2)
+    def pnl(r):
+        return _f(r.get("realized_pnl")) + _f(r.get("unrealized_pnl"))
+    return round(pnl(rows[-1]) - pnl(rows[0]), 2)
 
 
 @app.route("/api/overview")
