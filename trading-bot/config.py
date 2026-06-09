@@ -11,7 +11,9 @@ load_dotenv()
 
 def _get_bool(name: str, default: bool) -> bool:
     val = os.getenv(name)
-    if val is None:
+    # Пустая строка (например, форма настроек записала "KEY=") = «не задано» → дефолт,
+    # иначе включённый по умолчанию брокер молча выключался бы после сохранения.
+    if val is None or val.strip() == "":
         return default
     return val.strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -38,8 +40,8 @@ def _get_int_opt(name: str) -> int | None:
 # поэтому ограничиваем убыток (для крипты по умолчанию выключен). Перекрываются
 # ALPACA_DCA_*.
 STOCK_DCA_DEFAULTS = {
-    "base_order": 50.0,
-    "safety_order": 50.0,
+    "base_order": 25.0,
+    "safety_order": 25.0,
     "max_safety_orders": 4,
     "price_deviation_pct": 1.5,
     "take_profit_pct": 2.0,

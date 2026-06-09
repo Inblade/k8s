@@ -70,6 +70,10 @@ def save_settings(values: dict) -> list[str]:
         if key not in values:
             continue
         val = str(values[key])
+        # Пустое значение = «не трогать»: не затираем ключи/булевы дефолты пустотой
+        # (иначе включённый брокер мог бы выключиться после сохранения настроек).
+        if val.strip() == "":
+            continue
         # Замаскированное значение (не редактировали) — не трогаем.
         if key in SECRET_FIELDS and val.startswith(MASK):
             continue

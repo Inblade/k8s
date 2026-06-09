@@ -476,6 +476,14 @@ class TestConfigKeys(unittest.TestCase):
             cfg = Config.load()
         self.assertEqual((cfg.api_key, cfg.api_secret), ("lk", "ls"))
 
+    def test_empty_bool_uses_default(self):
+        # пустая строка в .env (форма записала "KEY=") = дефолт, НЕ False
+        from config import _get_bool
+        with mock.patch.dict(os.environ, {"BINANCE_ENABLED": ""}, clear=False):
+            self.assertTrue(_get_bool("BINANCE_ENABLED", True))
+        with mock.patch.dict(os.environ, {"BINANCE_ENABLED": "false"}, clear=False):
+            self.assertFalse(_get_bool("BINANCE_ENABLED", True))
+
     def test_testnet_fallback_to_main(self):
         env = {"TESTNET": "true", "DRY_RUN": "false", "STRATEGY": "dca",
                "SYMBOL": "BTCUSDT", "TRADE_QUOTE_AMOUNT": "1000",
@@ -514,6 +522,15 @@ class TestSettingsStore(unittest.TestCase):
         v = dotenv_values(self.tmp)
         self.assertEqual(v["BINANCE_API_SECRET"], "supersecretvalue")  # не тронут
         self.assertEqual(v["STRATEGY"], "swing")                       # изменён
+
+    def test_save_skips_empty_values(self):
+        # пустое значение НЕ должно затирать существующее (иначе бул-дефолты ломаются)
+        self.tmp.write_text("BINANCE_ENABLED=true\nSTRATEGY=dca\n")
+        self.ss.save_settings({"BINANCE_ENABLED": "", "STRATEGY": "swing"})
+        from dotenv import dotenv_values
+        v = dotenv_values(self.tmp)
+        self.assertEqual(v["BINANCE_ENABLED"], "true")  # не затёрто пустым
+        self.assertEqual(v["STRATEGY"], "swing")
 
     def test_save_real_secret(self):
         self.ss.save_settings({"BINANCE_API_SECRET": "newrealsecret"})
