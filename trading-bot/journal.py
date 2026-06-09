@@ -9,9 +9,9 @@ DIR = Path(__file__).parent
 TRADES_CSV = DIR / "trades.csv"
 EQUITY_CSV = DIR / "equity.csv"
 
-TRADE_FIELDS = ["time", "symbol", "side", "reason", "price", "qty", "quote",
+TRADE_FIELDS = ["time", "source", "symbol", "side", "reason", "price", "qty", "quote",
                 "avg_entry", "realized_pnl"]
-EQUITY_FIELDS = ["time", "price", "position_qty", "position_value",
+EQUITY_FIELDS = ["time", "source", "price", "position_qty", "position_value",
                  "unrealized_pnl", "realized_pnl", "equity", "withdrawn", "reserve"]
 
 
@@ -36,9 +36,10 @@ def _append(path: Path, fields: list[str], row: dict) -> None:
 
 
 def record_trade(symbol: str, side: str, reason: str, price: float, qty: float,
-                 quote: float, avg_entry: float, realized_pnl: float = 0.0) -> None:
+                 quote: float, avg_entry: float, realized_pnl: float = 0.0,
+                 source: str = "binance") -> None:
     _append(TRADES_CSV, TRADE_FIELDS, {
-        "time": _now(), "symbol": symbol, "side": side, "reason": reason,
+        "time": _now(), "source": source, "symbol": symbol, "side": side, "reason": reason,
         "price": round(price, 2), "qty": round(qty, 8), "quote": round(quote, 2),
         "avg_entry": round(avg_entry, 2), "realized_pnl": round(realized_pnl, 4),
     })
@@ -46,9 +47,10 @@ def record_trade(symbol: str, side: str, reason: str, price: float, qty: float,
 
 def record_equity(price: float, position_qty: float, position_value: float,
                   unrealized_pnl: float, realized_pnl: float,
-                  equity: float, withdrawn: float, reserve: float) -> None:
+                  equity: float, withdrawn: float, reserve: float,
+                  source: str = "binance") -> None:
     _append(EQUITY_CSV, EQUITY_FIELDS, {
-        "time": _now(), "price": round(price, 2),
+        "time": _now(), "source": source, "price": round(price, 2),
         "position_qty": round(position_qty, 8), "position_value": round(position_value, 2),
         "unrealized_pnl": round(unrealized_pnl, 2), "realized_pnl": round(realized_pnl, 2),
         "equity": round(equity, 2), "withdrawn": round(withdrawn, 2),

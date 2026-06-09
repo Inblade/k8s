@@ -98,6 +98,7 @@ PAGE = """
   </aside>
   <main class="content">
     <div id="hint" style="display:none; margin:16px 24px 0; padding:12px 16px; background:#3a2a00; border:1px solid #6b4f00; border-radius:8px; color:#e3b341;"></div>
+    <div id="dataTabs" style="padding:8px 24px 0; display:flex; gap:8px;"></div>
     <div class="cards" id="cards"></div>
     <div id="regime" style="padding:0 24px 8px;"></div>
     <div class="grid">
@@ -137,11 +138,27 @@ PAGE = """
 <script>
 const PRIMARY = "{{ symbol }}";
 let equityChart, priceChart;
+let dataSource = 'binance';  // какой брокер показываем на графиках/карточках
+let unitsCache = [];
+
+function renderTabs(){
+  const names = unitsCache.map(u=>u.name);
+  if(!names.includes(dataSource) && names.length) dataSource = names[0];
+  const LBL = {binance:'Binance · крипта', alpaca:'Alpaca · акции'};
+  document.getElementById('dataTabs').innerHTML = names.map(n=>
+    `<button class="btn" style="width:auto;margin:0;${n===dataSource?'background:#1f6feb;border-color:#1f6feb':''}"
+      onclick="selectSource('${n}')">${LBL[n]||n}</button>`).join('');
+}
+function selectSource(n){ dataSource = n; resetCharts(); renderTabs(); load(); }
+function resetCharts(){
+  if(equityChart){ equityChart.destroy(); equityChart=null; }
+  if(priceChart){ priceChart.destroy(); priceChart=null; }
+}
 function money(x){ return (x>=0?'':'-') + '$' + Math.abs(x).toFixed(2); }
 function cls(x){ return x>=0?'pos':'neg'; }
 
 async function load(){
-  const d = await (await fetch('/api/data')).json();
+  const d = await (await fetch('/api/data?source=' + dataSource)).json();
   // подсказка, если данных ещё нет
   const hint = document.getElementById('hint');
   if(d.equity.length === 0){
@@ -234,6 +251,8 @@ async function loadControl(){
   const errs = info.errors||{};
   Object.keys(errs).forEach(k=> html += `<div class="pos-item" style="border-color:#7a2a2a"><b>${BROKER_NAME[k]||k}</b> ⚠<br><span class="muted">${errs[k]}</span></div>`);
   document.getElementById('brokers').innerHTML = html || '<div class="muted">нет активных брокеров</div>';
+  unitsCache = units;
+  renderTabs();
 
   const p = await (await fetch('/api/positions')).json();
   document.getElementById('positions').innerHTML = (p.positions||[]).map(x=>{
@@ -347,8 +366,14 @@ def _f(value, default=0.0) -> float:
 
 @app.route("/api/data")
 def data():
-    equity = journal.read_csv(journal.EQUITY_CSV)
-    trades = journal.read_csv(journal.TRADES_CSV)
+    # Данные разнесены по брокерам колонкой source (старые строки без неё = binance).
+    source = request.args.get("source", "binance")
+
+    def _match(r):
+        return (r.get("source") or "binance") == source
+
+    equity = [r for r in journal.read_csv(journal.EQUITY_CSV) if _match(r)]
+    trades = [r for r in journal.read_csv(journal.TRADES_CSV) if _match(r)]
     last = equity[-1] if equity else {}
     wins = sum(1 for t in trades if t.get("side") == "SELL" and _f(t.get("realized_pnl")) > 0)
     sells = sum(1 for t in trades if t.get("side") == "SELL")
@@ -362,7 +387,7 @@ def data():
         "wins": wins,
     }
     status = {}
-    status_file = journal.DIR / "status.json"
+    status_file = journal.DIR / ("status.json" if source == "binance" else f"status_{source}.json")
     if status_file.exists():
         try:
             status = json.loads(status_file.read_text())

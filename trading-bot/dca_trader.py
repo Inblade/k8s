@@ -36,9 +36,10 @@ def _state_file(symbol: str) -> Path:
 
 
 class DcaTrader:
-    def __init__(self, cfg: Config, exchange: Exchange):
+    def __init__(self, cfg: Config, exchange: Exchange, source: str = "binance"):
         self.cfg = cfg
         self.ex = exchange
+        self.source = source  # метка брокера для журнала/графиков
         params = params_from_config(cfg)
         # Отдельный движок и файл состояния на каждую монету.
         self.engines: dict[str, DcaEngine] = {}
@@ -94,7 +95,8 @@ class DcaTrader:
             avg = engine.state.avg_entry
             log.info("[%s] >>> ПОКУПКА (%s): +%.8f за %.2f USDT | средняя=%.2f",
                      symbol, order.reason, qty, spent, avg)
-            journal.record_trade(symbol, "BUY", order.reason, price, qty, spent, avg)
+            journal.record_trade(symbol, "BUY", order.reason, price, qty, spent, avg,
+                                 source=self.source)
         elif order.action == Action.SELL_ALL:
             proceeds = s.qty * price * (1 - self.cfg.fee_pct / 100)
             realized = proceeds - s.spent
@@ -103,7 +105,7 @@ class DcaTrader:
             log.info("[%s] <<< ПРОДАЖА (%s): %.8f по ~%.2f | P&L=%.2f%% (%.2f USDT)",
                      symbol, order.reason, s.qty, price, pnl_pct, realized)
             journal.record_trade(symbol, "SELL", order.reason, price, s.qty,
-                                 proceeds, s.avg_entry, realized)
+                                 proceeds, s.avg_entry, realized, source=self.source)
             engine.apply_sell_all()
             self.withdrawer.on_realized_profit(realized)
         self._save(symbol)
@@ -125,12 +127,16 @@ class DcaTrader:
             price=prices[self.cfg.symbol], position_qty=0.0, position_value=total_value,
             unrealized_pnl=unrealized, realized_pnl=realized, equity=equity,
             withdrawn=self.withdrawer.state.withdrawn_total,
-            reserve=self.withdrawer.state.reserve,
+            reserve=self.withdrawer.state.reserve, source=self.source,
         )
+
+    def _status_file(self) -> Path:
+        # Свой файл статуса на брокера, чтобы адаптивные режимы не перетирали друг друга.
+        return DIR / (f"status_{self.source}.json" if self.source != "binance" else "status.json")
 
     def _write_status(self, statuses: dict) -> None:
         from datetime import datetime, timezone
-        STATUS_FILE.write_text(json.dumps({
+        self._status_file().write_text(json.dumps({
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "adaptive": True,
             "symbols": statuses,
@@ -205,7 +211,7 @@ class DcaTrader:
             log.info("[%s] Закрытие позиции вручную: %.8f по ~%.2f | P&L=%.2f USDT",
                      sym, s.qty, price, realized)
             journal.record_trade(sym, "SELL", "ручное закрытие", price, s.qty,
-                                 proceeds, s.avg_entry, realized)
+                                 proceeds, s.avg_entry, realized, source=self.source)
             e.apply_sell_all()
             self._save(sym)
             self.withdrawer.on_realized_profit(realized)

@@ -29,6 +29,8 @@ def cleanup() -> None:
         (DIR / name).unlink(missing_ok=True)
     for p in DIR.glob("dca_state_*.json"):
         p.unlink(missing_ok=True)
+    for p in DIR.glob("status_*.json"):
+        p.unlink(missing_ok=True)
     for p in DIR.glob("*.bak"):
         p.unlink(missing_ok=True)
 
@@ -539,6 +541,21 @@ class TestDcaControl(unittest.TestCase):
         sells = [r for r in journal.read_csv(journal.TRADES_CSV)
                  if r["side"] == "SELL" and r["reason"] == "ручное закрытие"]
         self.assertEqual(len(sells), 1)
+
+
+class TestSourceTagging(unittest.TestCase):
+    def setUp(self): cleanup()
+    def tearDown(self): cleanup()
+
+    def test_trades_and_equity_tagged(self):
+        from dca_trader import DcaTrader
+        ex = FakeExchange()
+        ex.set_price(100)
+        DcaTrader(make_cfg(symbols=["BTCUSDT"]), ex, source="alpaca").step()
+        trades = journal.read_csv(journal.TRADES_CSV)
+        equity = journal.read_csv(journal.EQUITY_CSV)
+        self.assertTrue(trades and all(r["source"] == "alpaca" for r in trades))
+        self.assertTrue(equity and all(r["source"] == "alpaca" for r in equity))
 
 
 # ─────────────────────────── manager (без сети) ───────────────────────────

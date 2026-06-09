@@ -57,7 +57,7 @@ def _build_alpaca(cfg: Config, log: logging.Logger):
              ", ".join(acfg.symbols), info["balances"] or "пусто")
     if not info["can_trade"]:
         raise PermissionError("Аккаунт Alpaca не может торговать (trading_blocked).")
-    return DcaTrader(acfg, broker)
+    return DcaTrader(acfg, broker, source="alpaca")
 
 
 def create_traders(cfg: Config, log: logging.Logger) -> tuple[list, dict]:
