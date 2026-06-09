@@ -32,6 +32,18 @@ def _get_int_opt(name: str) -> int | None:
     return int(val) if val not in (None, "") else None
 
 
+# Разумные дефолты DCA под крупные акции. Они МЕНЕЕ волатильны, чем крипта
+# (1–2% в день против 3–8%), поэтому шаг просадки и тейк-профит теснее —
+# иначе докупки/цели почти не срабатывают. Перекрываются ALPACA_DCA_*.
+STOCK_DCA_DEFAULTS = {
+    "base_order": 50.0,
+    "safety_order": 50.0,
+    "max_safety_orders": 4,
+    "price_deviation_pct": 2.0,
+    "take_profit_pct": 2.0,
+}
+
+
 def _get_int(name: str, default: int) -> int:
     val = os.getenv(name)
     return int(val) if val not in (None, "") else default
@@ -201,10 +213,11 @@ class Config:
 
     def for_alpaca(self) -> "Config":
         """Производный конфиг для DCA-трейдера на Alpaca: акции, свои символы,
-        бюджет и DCA-параметры (None = наследовать крипто-значение), без комиссии
-        и без крипто-вывода. paper → testnet-семантика."""
-        def pick(opt, base):
-            return base if opt is None else opt
+        бюджет и DCA-параметры. Пусто (ALPACA_DCA_* не задано) → разумные дефолты
+        под акции (STOCK_DCA_DEFAULTS), а не крипто-значения. paper → testnet."""
+        d = STOCK_DCA_DEFAULTS
+        def pick(opt, default):
+            return default if opt is None else opt
         derived = replace(
             self,
             symbols=self.alpaca_symbols or ["AAPL"],
@@ -215,11 +228,11 @@ class Config:
             api_key=self.alpaca_api_key,
             api_secret=self.alpaca_api_secret,
             withdraw_enabled=False,
-            dca_base_order=pick(self.alpaca_dca_base_order, self.dca_base_order),
-            dca_safety_order=pick(self.alpaca_dca_safety_order, self.dca_safety_order),
-            dca_max_safety_orders=pick(self.alpaca_dca_max_safety_orders, self.dca_max_safety_orders),
-            dca_price_deviation_pct=pick(self.alpaca_dca_price_deviation_pct, self.dca_price_deviation_pct),
-            dca_take_profit_pct=pick(self.alpaca_dca_take_profit_pct, self.dca_take_profit_pct),
+            dca_base_order=pick(self.alpaca_dca_base_order, d["base_order"]),
+            dca_safety_order=pick(self.alpaca_dca_safety_order, d["safety_order"]),
+            dca_max_safety_orders=pick(self.alpaca_dca_max_safety_orders, d["max_safety_orders"]),
+            dca_price_deviation_pct=pick(self.alpaca_dca_price_deviation_pct, d["price_deviation_pct"]),
+            dca_take_profit_pct=pick(self.alpaca_dca_take_profit_pct, d["take_profit_pct"]),
         )
         derived.validate()  # поймать перебор бюджета/символов до старта
         return derived
