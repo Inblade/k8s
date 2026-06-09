@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gold Edition — Kochetova Watercolour</title>
+  <meta name="description" content="The Gold Edition book featuring works of the Step by Step project participants." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="brand" href="index.html">Kochetova<small>Watercolour Art</small></a>
+      <button class="nav-toggle" aria-label="Menu">&#9776;</button>
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="step-by-step.html">Step by Step</a></li>
+        <li><a href="rules.html">Participation</a></li>
+        <li><a href="participants.html">Finalists</a></li>
+        <li><a href="festival.html">Festival</a></li>
+        <li><a href="gold-edition.html" class="is-active">Gold Edition</a></li>
+        <li><a href="contact.html">Contact</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <section class="hero" style="padding:90px 0 60px;">
+    <div class="container">
+      <h1>Gold Edition</h1>
+      <p class="lead"><span class="todo">ЗАМЕНИТЬ подзаголовок</span> The book featuring works of the project participants.</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container split">
+      <div class="card__media" style="border-radius:10px;overflow:hidden;">
+        <div class="placeholder">ФОТО: обложка книги<br>(assets/images/)</div>
+      </div>
+      <div class="prose">
+        <h2>About the book</h2>
+        <p><span class="todo">ЗАМЕНИТЬ текст</span> The Gold Edition gathers selected watercolour works of the project participants in a printed book.</p>
+        <p><span class="todo">ЗАМЕНИТЬ — детали</span> Add details: format, number of pages, how to order.</p>
+        <p><a class="btn" href="contact.html">Order / ask about the book</a></p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <span>© <span id="year"></span> Julia Kochetova. All rights reserved.</span>
+        <span><a href="index.html" style="color:#fff;">jkochetova.com</a></span>
+      </div>
+    </div>
+  </footer>
+  <script src="assets/js/main.js"></script>
+  <script>document.getElementById("year").textContent = new Date().getFullYear();</script>
+</body>
+</html>

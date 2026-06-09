@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Step by Step project — Kochetova Watercolour</title>
+  <meta name="description" content="The Step by Step international contemporary watercolour project by Julia Kochetova." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="brand" href="index.html">Kochetova<small>Watercolour Art</small></a>
+      <button class="nav-toggle" aria-label="Menu">&#9776;</button>
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="step-by-step.html" class="is-active">Step by Step</a></li>
+        <li><a href="rules.html">Participation</a></li>
+        <li><a href="participants.html">Finalists</a></li>
+        <li><a href="festival.html">Festival</a></li>
+        <li><a href="gold-edition.html">Gold Edition</a></li>
+        <li><a href="contact.html">Contact</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <section class="hero" style="padding:90px 0 60px;">
+    <div class="container">
+      <h1>The Step by Step project</h1>
+      <p class="lead">
+        <span class="todo">ЗАМЕНИТЬ подзаголовок</span>
+        An international contemporary watercolour project.
+      </p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container split">
+      <div class="prose">
+        <h2>About the project</h2>
+        <p>
+          <span class="todo">ЗАМЕНИТЬ текст</span>
+          Step by Step is an international watercolour art project for artists
+          from around the world. It offers an opportunity to look at the art of
+          watercolour from the inside and to reveal the stages of creating a
+          watercolour work of any complexity.
+        </p>
+        <p>
+          <span class="todo">ЗАМЕНИТЬ текст</span>
+          The project brings together festivals, exhibitions, plein-airs and
+          step-by-step tutorials in watercolour and graphics.
+        </p>
+        <p><a class="btn btn--ghost" href="rules.html">Rules of participation</a></p>
+      </div>
+      <div class="card__media" style="border-radius:10px;overflow:hidden;">
+        <div class="placeholder">ФОТО: работа / процесс<br>(assets/images/)</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section band">
+    <div class="container">
+      <h2 class="text-center">Highlights</h2>
+      <div class="grid grid--3" style="margin-top:32px;">
+        <div class="card"><div class="card__body"><h3>Idea</h3><p class="muted"><span class="todo">ЗАМЕНИТЬ</span> The concept behind the project.</p></div></div>
+        <div class="card"><div class="card__body"><h3>Seasons</h3><p class="muted"><span class="todo">ЗАМЕНИТЬ</span> How the seasons are organised.</p></div></div>
+        <div class="card"><div class="card__body"><h3>Community</h3><p class="muted"><span class="todo">ЗАМЕНИТЬ</span> Artists taking part worldwide.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <span>© <span id="year"></span> Julia Kochetova. All rights reserved.</span>
+        <span><a href="index.html" style="color:#fff;">jkochetova.com</a></span>
+      </div>
+    </div>
+  </footer>
+  <script src="assets/js/main.js"></script>
+  <script>document.getElementById("year").textContent = new Date().getFullYear();</script>
+</body>
+</html>
