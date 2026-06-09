@@ -21,6 +21,17 @@ def _get_float(name: str, default: float) -> float:
     return float(val) if val not in (None, "") else default
 
 
+def _get_float_opt(name: str) -> float | None:
+    """Float или None, если переменная не задана (для «наследовать значение»)."""
+    val = os.getenv(name)
+    return float(val) if val not in (None, "") else None
+
+
+def _get_int_opt(name: str) -> int | None:
+    val = os.getenv(name)
+    return int(val) if val not in (None, "") else None
+
+
 def _get_int(name: str, default: int) -> int:
     val = os.getenv(name)
     return int(val) if val not in (None, "") else default
@@ -121,6 +132,12 @@ class Config:
     alpaca_api_secret: str = ""
     alpaca_symbols: list[str] = field(default_factory=list)
     alpaca_trade_quote_amount: float = 1000.0
+    # Отдельные DCA-параметры под акции (None = наследовать крипто-значение).
+    alpaca_dca_base_order: float | None = None
+    alpaca_dca_safety_order: float | None = None
+    alpaca_dca_max_safety_orders: int | None = None
+    alpaca_dca_price_deviation_pct: float | None = None
+    alpaca_dca_take_profit_pct: float | None = None
 
     @classmethod
     def load(cls) -> "Config":
@@ -173,14 +190,22 @@ class Config:
             alpaca_api_secret=os.getenv("APCA_API_SECRET_KEY", "").strip(),
             alpaca_symbols=_split_csv(os.getenv("ALPACA_SYMBOLS", "")),
             alpaca_trade_quote_amount=_get_float("ALPACA_TRADE_QUOTE_AMOUNT", 1000.0),
+            alpaca_dca_base_order=_get_float_opt("ALPACA_DCA_BASE_ORDER"),
+            alpaca_dca_safety_order=_get_float_opt("ALPACA_DCA_SAFETY_ORDER"),
+            alpaca_dca_max_safety_orders=_get_int_opt("ALPACA_DCA_MAX_SAFETY_ORDERS"),
+            alpaca_dca_price_deviation_pct=_get_float_opt("ALPACA_DCA_PRICE_DEVIATION_PCT"),
+            alpaca_dca_take_profit_pct=_get_float_opt("ALPACA_DCA_TAKE_PROFIT_PCT"),
         )
         cfg.validate()
         return cfg
 
     def for_alpaca(self) -> "Config":
-        """Производный конфиг для DCA-трейдера на Alpaca: акции, свои символы и
-        бюджет, без комиссии и без крипто-вывода. paper → testnet-семантика."""
-        return replace(
+        """Производный конфиг для DCA-трейдера на Alpaca: акции, свои символы,
+        бюджет и DCA-параметры (None = наследовать крипто-значение), без комиссии
+        и без крипто-вывода. paper → testnet-семантика."""
+        def pick(opt, base):
+            return base if opt is None else opt
+        derived = replace(
             self,
             symbols=self.alpaca_symbols or ["AAPL"],
             trade_quote_amount=self.alpaca_trade_quote_amount,
@@ -190,7 +215,14 @@ class Config:
             api_key=self.alpaca_api_key,
             api_secret=self.alpaca_api_secret,
             withdraw_enabled=False,
+            dca_base_order=pick(self.alpaca_dca_base_order, self.dca_base_order),
+            dca_safety_order=pick(self.alpaca_dca_safety_order, self.dca_safety_order),
+            dca_max_safety_orders=pick(self.alpaca_dca_max_safety_orders, self.dca_max_safety_orders),
+            dca_price_deviation_pct=pick(self.alpaca_dca_price_deviation_pct, self.dca_price_deviation_pct),
+            dca_take_profit_pct=pick(self.alpaca_dca_take_profit_pct, self.dca_take_profit_pct),
         )
+        derived.validate()  # поймать перебор бюджета/символов до старта
+        return derived
 
     @property
     def symbol(self) -> str:

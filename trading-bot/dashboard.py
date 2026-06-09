@@ -308,7 +308,10 @@ document.getElementById('btnSettings').onclick = async ()=>{
     BINANCE_API_KEY:'Binance боевой API Key', BINANCE_API_SECRET:'Binance боевой API Secret',
     BINANCE_TESTNET_API_KEY:'Binance Testnet Key', BINANCE_TESTNET_API_SECRET:'Binance Testnet Secret',
     ALPACA_ENABLED:'Alpaca/акции вкл (true/false)', ALPACA_PAPER:'Alpaca paper (true/false)',
-    ALPACA_SYMBOLS:'Акции через запятую (AAPL,MSFT)', ALPACA_TRADE_QUOTE_AMOUNT:'Бюджет акций, USD',
+    ALPACA_SYMBOLS:'Тикеры акций через запятую (AAPL,MSFT)', ALPACA_TRADE_QUOTE_AMOUNT:'Бюджет акций, USD',
+    ALPACA_DCA_BASE_ORDER:'Акции: базовый ордер (пусто=как крипта)',
+    ALPACA_DCA_SAFETY_ORDER:'Акции: размер докупки', ALPACA_DCA_MAX_SAFETY_ORDERS:'Акции: макс. докупок',
+    ALPACA_DCA_PRICE_DEVIATION_PCT:'Акции: шаг просадки %', ALPACA_DCA_TAKE_PROFIT_PCT:'Акции: тейк-профит %',
     APCA_API_KEY_ID:'Alpaca API Key ID', APCA_API_SECRET_KEY:'Alpaca API Secret'};
   document.getElementById('settingsForm').innerHTML = Object.keys(s).map(k=>
     `<div class="field"><label>${labels[k]||k}</label><input data-k="${k}" value="${s[k]||''}"></div>`).join('');

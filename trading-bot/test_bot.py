@@ -668,6 +668,24 @@ class TestBrokerWiring(unittest.TestCase):
         self.assertEqual(a.api_key, "ak")
         self.assertTrue(a.testnet)  # paper → testnet-семантика
 
+    def test_for_alpaca_dca_override_and_inherit(self):
+        cfg = dataclasses.replace(
+            make_cfg(symbols=["BTCUSDT"]), alpaca_symbols=["AAPL"],
+            alpaca_api_key="k", alpaca_api_secret="s", alpaca_trade_quote_amount=5000.0,
+            alpaca_dca_take_profit_pct=8.0)  # TP переопределён, остальное наследуется
+        a = cfg.for_alpaca()
+        self.assertEqual(a.dca_take_profit_pct, 8.0)
+        self.assertEqual(a.dca_base_order, cfg.dca_base_order)
+
+    def test_for_alpaca_budget_validation(self):
+        cfg = dataclasses.replace(
+            make_cfg(symbols=["BTCUSDT"]), alpaca_symbols=["AAPL"],
+            alpaca_api_key="k", alpaca_api_secret="s", alpaca_trade_quote_amount=50.0,
+            alpaca_dca_base_order=100.0, alpaca_dca_safety_order=100.0,
+            alpaca_dca_max_safety_orders=5)  # 100+100*5=600 > бюджет 50
+        with self.assertRaises(ValueError):
+            cfg.for_alpaca()
+
     def test_create_traders_attempts_binance_only(self):
         from main import create_traders
         cfg = make_cfg(symbols=["BTCUSDT"])  # binance on, alpaca off
