@@ -52,21 +52,26 @@ def make_cfg(**over) -> Config:
 
 class FakeExchange:
     """Дак-тайп биржи без сети для DCA-трейдера."""
-    dry_run = True
     testnet = True
 
-    def __init__(self, price=100.0, closes=None):
+    def __init__(self, price=100.0, closes=None, dry_run=True, free=1e9):
         self._price = price
         self._closes = closes or [100.0] * 600
+        self.dry_run = dry_run
+        self._free = free
         self.sold = []
+        self.bought = []
 
     def set_price(self, p): self._price = p
     def get_price(self, s): return self._price
     def get_closes(self, s, interval, limit): return self._closes
-    def market_buy_quote(self, s, q): return {"qty": q / self._price, "cummulativeQuoteQty": q}
+    def market_buy_quote(self, s, q):
+        self.bought.append((s, q)); return {"qty": q / self._price, "cummulativeQuoteQty": q}
     def market_sell_qty(self, s, qty): self.sold.append((s, qty)); return {"qty": qty}
     def round_qty(self, s, q): return q
     def min_notional(self, s): return 0.0
+    def quote_asset(self, s): return "USDT"
+    def get_free_balance(self, asset): return self._free
     def withdraw(self, a, n, addr, amt): return {"id": "x"}
 
 
@@ -408,6 +413,16 @@ class TestDcaTrader(unittest.TestCase):
         self.assertEqual(journal.read_csv(journal.TRADES_CSV), [])
         status = json.loads((DIR / "status.json").read_text())
         self.assertEqual(status["symbols"]["BTCUSDT"]["regime"], "тренд вниз")
+
+    def test_insufficient_balance_skips_buy(self):
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["BTCUSDT"])
+        # боевой режим, но свободно всего 5 USDT < базового ордера 30
+        ex = FakeExchange(dry_run=False, free=5.0)
+        ex.set_price(100)
+        DcaTrader(cfg, ex).step()
+        self.assertEqual(ex.bought, [])                       # покупки не было
+        self.assertEqual(journal.read_csv(journal.TRADES_CSV), [])
 
     def test_equity_aggregation(self):
         from dca_trader import DcaTrader

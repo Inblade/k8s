@@ -74,12 +74,18 @@ class DcaTrader:
             return
 
         if order.action == Action.BUY:
-            # Биржа отклонит ордер меньше минимального (MIN_NOTIONAL) — проверяем в бою.
             if not self.ex.dry_run:
+                # Биржа отклонит ордер меньше минимального (MIN_NOTIONAL).
                 min_notional = self.ex.min_notional(symbol)
                 if order.quote < min_notional:
                     log.warning("[%s] Ордер %.2f USDT меньше минимума %.2f — пропуск",
                                 symbol, order.quote, min_notional)
+                    return
+                # Достаточно ли свободных средств (одна USDT-касса на все монеты).
+                free = self.ex.get_free_balance(self.ex.quote_asset(symbol))
+                if free < order.quote:
+                    log.warning("[%s] Недостаточно средств: нужно %.2f, свободно %.2f — пропуск",
+                                symbol, order.quote, free)
                     return
             result = self.ex.market_buy_quote(symbol, order.quote)
             qty = float(result.get("qty") or result.get("executedQty", 0.0))

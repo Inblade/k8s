@@ -29,6 +29,9 @@ class Exchange:
     def base_asset(self, symbol: str) -> str:
         return self._symbol_info(symbol)["baseAsset"]
 
+    def quote_asset(self, symbol: str) -> str:
+        return self._symbol_info(symbol)["quoteAsset"]
+
     # ── Проверка доступа при старте ────────────────────────────────────
     def verify_credentials(self, expect_withdraw: bool = False) -> dict:
         """Проверяет, что ключи валидны и права соответствуют ожиданиям.
