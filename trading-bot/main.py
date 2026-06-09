@@ -2,23 +2,12 @@
 from __future__ import annotations
 
 import logging
-import sys
 
 from config import Config
 from dca_trader import DcaTrader
 from exchange import Exchange
+from logsetup import setup_logging
 from trader import Trader
-
-
-def setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler("bot.log", encoding="utf-8"),
-        ],
-    )
 
 
 def main() -> int:
