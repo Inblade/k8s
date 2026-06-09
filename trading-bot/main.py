@@ -43,6 +43,46 @@ def create_trader(cfg: Config, log: logging.Logger):
     return trader
 
 
+def _build_alpaca(cfg: Config, log: logging.Logger):
+    """DCA-трейдер для акций на Alpaca. paper → песочница (как Binance testnet)."""
+    from alpaca_broker import AlpacaBroker  # ленивый импорт: нужен только при ALPACA_ENABLED
+
+    acfg = cfg.for_alpaca()
+    if not acfg.api_key or not acfg.api_secret:
+        raise ValueError("ALPACA_ENABLED=true, но не заданы APCA_API_KEY_ID / APCA_API_SECRET_KEY")
+    broker = AlpacaBroker(acfg.api_key, acfg.api_secret, paper=cfg.alpaca_paper)
+    info = broker.verify_credentials()
+    log.info("Alpaca OK (%s) | canTrade=%s | акции: %s | кэш: %s",
+             "paper" if cfg.alpaca_paper else "LIVE", info["can_trade"],
+             ", ".join(acfg.symbols), info["balances"] or "пусто")
+    if not info["can_trade"]:
+        raise PermissionError("Аккаунт Alpaca не может торговать (trading_blocked).")
+    return DcaTrader(acfg, broker)
+
+
+def create_traders(cfg: Config, log: logging.Logger) -> tuple[list, dict]:
+    """Собирает трейдеры для всех включённых брокеров.
+
+    Возвращает (units, errors): units = [(name, trader)], errors = {name: текст}.
+    Сбой одного брокера не мешает запуститься другому.
+    """
+    units: list = []
+    errors: dict = {}
+    if cfg.binance_enabled:
+        try:
+            units.append(("binance", create_trader(cfg, log)))
+        except Exception as exc:  # noqa: BLE001
+            errors["binance"] = str(exc)
+            log.error("Binance не запущен: %s", exc)
+    if cfg.alpaca_enabled:
+        try:
+            units.append(("alpaca", _build_alpaca(cfg, log)))
+        except Exception as exc:  # noqa: BLE001
+            errors["alpaca"] = str(exc)
+            log.error("Alpaca не запущен: %s", exc)
+    return units, errors
+
+
 def main() -> int:
     setup_logging()
     log = logging.getLogger("bot")

@@ -1,32 +1,56 @@
-"""Менеджер бота: запуск/остановка/перезапуск потока трейдера, смена режима
-(тест ↔ боевой) с закрытием позиций, доступ к балансам/позициям/ордерам.
+"""Менеджер бота: управляет потоками трейдеров сразу нескольких брокеров
+(Binance — крипта, Alpaca — акции). Старт/стоп/перезапуск, смена режима
+(тест/paper ↔ боевой) с закрытием позиций, доступ к позициям/балансам/ордерам.
 
-Используется приложением (app.py). Дашборд обращается к синглтону `instance`.
+Дашборд обращается к синглтону `instance`.
 """
 from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import dataclass
 
 import settings_store
 from config import Config
-from main import create_trader
+from main import create_traders
 
 log = logging.getLogger("bot.manager")
+
+
+@dataclass
+class Unit:
+    name: str
+    trader: object
+    thread: threading.Thread
+    stop_event: threading.Event
+
+
+def _mode_of(name: str, trader) -> str:
+    c = trader.cfg
+    if name == "alpaca":
+        return "paper" if c.testnet else "live"
+    if c.dry_run:
+        return "dry"
+    return "test" if c.testnet else "live"
 
 
 class BotManager:
     def __init__(self):
         self._lock = threading.RLock()
         self.cfg: Config | None = None
-        self.trader = None
-        self.thread: threading.Thread | None = None
-        self.stop_event: threading.Event | None = None
-        self.error: str | None = None
+        self.units: list[Unit] = []
+        self.errors: dict[str, str] = {}
 
     @property
     def running(self) -> bool:
-        return self.thread is not None and self.thread.is_alive()
+        return any(u.thread.is_alive() for u in self.units)
+
+    @property
+    def error(self) -> str | None:
+        return "; ".join(f"{k}: {v}" for k, v in self.errors.items()) or None
+
+    def _unit(self, name: str) -> Unit | None:
+        return next((u for u in self.units if u.name == name), None)
 
     # ── Жизненный цикл ─────────────────────────────────────────────────
     def start(self) -> None:
@@ -35,59 +59,76 @@ class BotManager:
                 return
             try:
                 self.cfg = Config.load()
-                self.trader = create_trader(self.cfg, log)
-                self.error = None
-            except Exception as exc:  # noqa: BLE001 — показываем причину в окне
-                self.error = str(exc)
-                self.trader = None
-                log.error("Старт бота не удался: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                self.errors = {"config": str(exc)}
+                log.error("Конфиг не загружен: %s", exc)
                 return
-            self.stop_event = threading.Event()
-            self.thread = threading.Thread(
-                target=self.trader.run, args=(self.stop_event,), daemon=True)
-            self.thread.start()
-            log.info("Бот запущен (режим: %s)", self.mode)
+            built, self.errors = create_traders(self.cfg, log)
+            self.units = []
+            for name, trader in built:
+                ev = threading.Event()
+                th = threading.Thread(target=trader.run, args=(ev,), daemon=True)
+                th.start()
+                self.units.append(Unit(name, trader, th, ev))
+                log.info("Брокер %s запущен (режим: %s)", name, _mode_of(name, trader))
 
     def stop(self) -> None:
         with self._lock:
-            if self.stop_event:
-                self.stop_event.set()
-            t = self.thread
-        if t:
-            t.join(timeout=15)
+            units = list(self.units)
+            for u in units:
+                u.stop_event.set()
+        for u in units:
+            u.thread.join(timeout=15)
         with self._lock:
-            self.thread = None
+            self.units = []
 
     def restart(self) -> None:
         self.stop()
         self.start()
 
     # ── Действия панели ────────────────────────────────────────────────
-    def flatten(self) -> int:
+    def flatten(self, broker: str | None = None) -> int:
         with self._lock:
-            if self.trader:
-                return self.trader.close_all_positions()
-            return 0
-
-    def switch_mode(self, target: str) -> dict:
-        """target: 'test' (testnet) или 'live' (боевой). Перед уходом в тест
-        закрываем открытые боевые позиции."""
-        if target not in ("test", "live"):
-            return {"ok": False, "error": "неизвестный режим"}
-        going_to_test = target == "test"
-        with self._lock:
-            currently_live = self.cfg is not None and not self.cfg.testnet and not self.cfg.dry_run
+            targets = [u for u in self.units if broker in (None, u.name)]
         closed = 0
-        if going_to_test and currently_live:
+        for u in targets:
             try:
-                closed = self.flatten()
+                closed += u.trader.close_all_positions()
             except Exception as exc:  # noqa: BLE001
-                log.error("Не удалось закрыть позиции перед сменой режима: %s", exc)
+                log.error("Не удалось закрыть позиции (%s): %s", u.name, exc)
+        return closed
+
+    def switch_mode(self, broker: str, target: str) -> dict:
+        """broker: binance|alpaca. target: для binance test|live, для alpaca paper|live.
+        Перед уходом из боевого в тест/paper закрываем открытые боевые позиции."""
+        with self._lock:
+            unit = self._unit(broker)
+            currently_live = unit is not None and _mode_of(broker, unit.trader) == "live"
+
+        if broker == "binance":
+            if target not in ("test", "live"):
+                return {"ok": False, "error": "режим binance: test|live"}
+            going_safe = target == "test"
+            env_key, env_val = "TESTNET", "true" if going_safe else "false"
+        elif broker == "alpaca":
+            if target not in ("paper", "live"):
+                return {"ok": False, "error": "режим alpaca: paper|live"}
+            going_safe = target == "paper"
+            env_key, env_val = "ALPACA_PAPER", "true" if going_safe else "false"
+        else:
+            return {"ok": False, "error": "неизвестный брокер"}
+
+        closed = 0
+        if going_safe and currently_live:
+            try:
+                closed = self.flatten(broker)
+            except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": f"закрытие позиций: {exc}"}
-        settings_store.set_value("TESTNET", "true" if going_to_test else "false")
-        settings_store.set_value("DRY_RUN", "false")
+        settings_store.set_value(env_key, env_val)
+        if broker == "binance":
+            settings_store.set_value("DRY_RUN", "false")
         self.restart()
-        return {"ok": True, "closed": closed, "mode": self.mode, "error": self.error}
+        return {"ok": True, "closed": closed, "error": self.error}
 
     def apply_settings(self, values: dict) -> dict:
         changed = settings_store.save_settings(values)
@@ -95,58 +136,61 @@ class BotManager:
         return {"ok": True, "changed": changed, "error": self.error}
 
     # ── Чтение состояния ───────────────────────────────────────────────
-    @property
-    def mode(self) -> str:
-        if self.cfg is None:
-            return "—"
-        if self.cfg.dry_run:
-            return "dry"
-        return "test" if self.cfg.testnet else "live"
-
     def info(self) -> dict:
-        return {
-            "running": self.running,
-            "mode": self.mode,
-            "strategy": self.cfg.strategy if self.cfg else None,
-            "symbols": self.cfg.symbols if self.cfg else [],
-            "error": self.error,
-        }
+        with self._lock:
+            units = [{
+                "name": u.name,
+                "mode": _mode_of(u.name, u.trader),
+                "running": u.thread.is_alive(),
+                "symbols": list(u.trader.cfg.symbols),
+            } for u in self.units]
+        return {"running": self.running, "units": units, "error": self.error,
+                "errors": self.errors}
 
     def positions(self) -> list[dict]:
+        out: list[dict] = []
         with self._lock:
-            if self.trader and hasattr(self.trader, "snapshot"):
-                try:
-                    return self.trader.snapshot()
-                except Exception as exc:  # noqa: BLE001
-                    log.error("Не удалось получить позиции: %s", exc)
-            return []
+            units = list(self.units)
+        for u in units:
+            try:
+                for p in u.trader.snapshot():
+                    out.append({**p, "broker": u.name})
+            except Exception as exc:  # noqa: BLE001
+                log.error("Позиции (%s) недоступны: %s", u.name, exc)
+        return out
 
     def balances(self) -> dict:
+        out: dict = {}
         with self._lock:
-            if self.trader:
-                try:
-                    return self.trader.ex.balances()
-                except Exception as exc:  # noqa: BLE001
-                    log.error("Не удалось получить балансы: %s", exc)
-            return {}
+            units = list(self.units)
+        for u in units:
+            try:
+                out[u.name] = u.trader.ex.balances()
+            except Exception as exc:  # noqa: BLE001
+                log.error("Балансы (%s) недоступны: %s", u.name, exc)
+        return out
 
     def open_orders(self) -> list:
+        out: list = []
         with self._lock:
-            if self.trader:
-                try:
-                    return self.trader.ex.open_orders()
-                except Exception as exc:  # noqa: BLE001
-                    log.error("Не удалось получить ордера: %s", exc)
-            return []
+            units = list(self.units)
+        for u in units:
+            try:
+                for o in u.trader.ex.open_orders():
+                    out.append({**o, "broker": u.name})
+            except Exception as exc:  # noqa: BLE001
+                log.error("Ордера (%s) недоступны: %s", u.name, exc)
+        return out
 
     def deposit_address(self, coin: str, network: str | None) -> dict:
         with self._lock:
-            if self.trader:
-                try:
-                    return self.trader.ex.deposit_address(coin, network)
-                except Exception as exc:  # noqa: BLE001
-                    return {"address": "", "note": f"ошибка: {exc}"}
-            return {"address": "", "note": "бот не запущен"}
+            unit = self._unit("binance")
+        if unit is None:
+            return {"address": "", "note": "Binance не запущен"}
+        try:
+            return unit.trader.ex.deposit_address(coin, network)
+        except Exception as exc:  # noqa: BLE001
+            return {"address": "", "note": f"ошибка: {exc}"}
 
 
 # Синглтон, к которому обращается дашборд.

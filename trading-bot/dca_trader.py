@@ -137,6 +137,10 @@ class DcaTrader:
         }))
 
     def step(self) -> None:
+        # Для рынков с расписанием (акции) вне торговых часов ничего не делаем.
+        if hasattr(self.ex, "market_open") and not self.ex.market_open():
+            log.info("Рынок закрыт — ждём открытия торгов.")
+            return
         # Цены берём один раз за шаг, чтобы не дёргать API повторно.
         prices = {sym: self.ex.get_price(sym) for sym in self.cfg.symbols}
         statuses: dict = {}

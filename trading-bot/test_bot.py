@@ -4,8 +4,11 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
 import os
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -542,15 +545,128 @@ class TestDcaControl(unittest.TestCase):
 class TestManager(unittest.TestCase):
     def test_fresh_info(self):
         from manager import BotManager
-        m = BotManager()
-        info = m.info()
+        info = BotManager().info()
         self.assertFalse(info["running"])
-        self.assertEqual(info["mode"], "—")
+        self.assertEqual(info["units"], [])
 
     def test_switch_mode_invalid(self):
         from manager import BotManager
-        r = BotManager().switch_mode("nonsense")
+        r = BotManager().switch_mode("nonsense", "live")
         self.assertFalse(r["ok"])
+
+    def test_switch_mode_bad_target(self):
+        from manager import BotManager
+        self.assertFalse(BotManager().switch_mode("binance", "paper")["ok"])
+        self.assertFalse(BotManager().switch_mode("alpaca", "test")["ok"])
+
+
+# ─────────────────────────── Alpaca broker (фейк-клиенты) ───────────────────────────
+class _NS(types.SimpleNamespace):
+    pass
+
+
+class FakeAlpacaTrading:
+    def __init__(self):
+        self.submitted = []
+        self.cash = 100000.0
+    def get_account(self): return _NS(cash=str(self.cash), trading_blocked=False)
+    def get_clock(self): return _NS(is_open=True)
+    def get_open_position(self, asset):
+        if asset == "AAPL":
+            return _NS(qty="5", qty_available="5")
+        raise RuntimeError("no position")
+    def get_all_positions(self): return [_NS(symbol="AAPL", qty="5")]
+    def get_orders(self, req):
+        return [_NS(symbol="AAPL", side=_NS(value="buy"), order_type=_NS(value="market"),
+                    limit_price=None, filled_avg_price="150", qty="1", notional=None)]
+    def submit_order(self, req):
+        self.submitted.append(req)
+        return _NS(id="ord-1")
+    def get_order_by_id(self, oid):
+        return _NS(id=oid, filled_qty="2", filled_avg_price="150", status="filled")
+
+
+class FakeAlpacaData:
+    def get_stock_latest_trade(self, req):
+        sym = req.symbol_or_symbols
+        return {sym: _NS(price=150.0)}
+    def get_stock_bars(self, req):
+        sym = req.symbol_or_symbols
+        return _NS(data={sym: [_NS(close=100.0), _NS(close=101.0), _NS(close=102.0)]})
+
+
+class TestAlpacaBroker(unittest.TestCase):
+    def _mk(self):
+        from alpaca_broker import AlpacaBroker
+        return AlpacaBroker("k", "s", paper=True,
+                            trading_client=FakeAlpacaTrading(), data_client=FakeAlpacaData())
+
+    def test_price_and_closes(self):
+        b = self._mk()
+        self.assertEqual(b.get_price("AAPL"), 150.0)
+        self.assertEqual(b.get_closes("AAPL", "1h", 3), [100.0, 101.0, 102.0])
+
+    def test_market_open_and_quote_asset(self):
+        b = self._mk()
+        self.assertTrue(b.market_open())
+        self.assertEqual(b.quote_asset("AAPL"), "USD")
+        self.assertEqual(b.base_asset("AAPL"), "AAPL")
+
+    def test_balances_and_free(self):
+        b = self._mk()
+        self.assertEqual(b.balances()["USD"], 100000.0)
+        self.assertEqual(b.get_free_balance("USD"), 100000.0)
+        self.assertEqual(b.get_free_balance("AAPL"), 5.0)
+        self.assertEqual(b.get_free_balance("TSLA"), 0.0)
+
+    def test_open_orders_normalized(self):
+        o = self._mk().open_orders()[0]
+        self.assertEqual(o["symbol"], "AAPL")
+        self.assertEqual(o["side"], "BUY")
+        self.assertEqual(o["type"], "market")
+
+    def test_buy_and_sell(self):
+        b = self._mk()
+        r = b.market_buy_quote("AAPL", 300)
+        self.assertEqual(r["qty"], 2.0)
+        self.assertAlmostEqual(r["cummulativeQuoteQty"], 300.0)
+        self.assertEqual(b.market_sell_qty("AAPL", 2)["qty"], 2.0)
+
+    def test_deposit_and_verify(self):
+        b = self._mk()
+        self.assertEqual(b.deposit_address("USD")["address"], "")
+        self.assertTrue(b.verify_credentials()["can_trade"])
+
+
+class TestBrokerWiring(unittest.TestCase):
+    def test_for_alpaca_derives(self):
+        cfg = make_cfg(symbols=["BTCUSDT"])
+        cfg = dataclasses.replace(cfg, alpaca_symbols=["AAPL", "MSFT"],
+                                  alpaca_paper=True, alpaca_trade_quote_amount=5000.0,
+                                  alpaca_api_key="ak", alpaca_api_secret="as_")
+        a = cfg.for_alpaca()
+        self.assertEqual(a.symbols, ["AAPL", "MSFT"])
+        self.assertEqual(a.fee_pct, 0.0)
+        self.assertFalse(a.withdraw_enabled)
+        self.assertEqual(a.api_key, "ak")
+        self.assertTrue(a.testnet)  # paper → testnet-семантика
+
+    def test_create_traders_attempts_binance_only(self):
+        from main import create_traders
+        cfg = make_cfg(symbols=["BTCUSDT"])  # binance on, alpaca off
+        units, errors = create_traders(cfg, logging.getLogger("t"))
+        names = [n for n, _ in units] + list(errors)  # успех ИЛИ ошибка — но попытка была
+        self.assertIn("binance", names)
+        self.assertNotIn("alpaca", names)
+
+    def test_create_traders_alpaca_missing_keys(self):
+        from main import create_traders
+        cfg = dataclasses.replace(make_cfg(symbols=["BTCUSDT"]),
+                                  binance_enabled=False, alpaca_enabled=True,
+                                  alpaca_api_key="", alpaca_api_secret="")
+        units, errors = create_traders(cfg, logging.getLogger("t"))
+        self.assertEqual(units, [])
+        self.assertIn("alpaca", errors)
 
 
 # ─────────────────────────── swing (смоук) ───────────────────────────

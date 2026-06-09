@@ -87,9 +87,8 @@ PAGE = """
 </header>
 <div class="layout">
   <aside class="sidebar">
-    <h3>Режим</h3>
-    <div id="modeBadge" class="modeBadge m-dry">—</div>
-    <button class="btn" id="btnMode" style="margin-top:8px">Переключить режим</button>
+    <h3>Брокеры и режим</h3>
+    <div id="brokers"><div class="muted">—</div></div>
     <h3>Действия</h3>
     <button class="btn" id="btnSettings">⚙ Настройки</button>
     <button class="btn" id="btnDeposit">⬇ Пополнить счёт</button>
@@ -218,44 +217,55 @@ async function load(){
 }
 
 // ── Панель управления ──────────────────────────────────────────────
-const MODE_LABEL = {dry:'DRY-RUN (симуляция)', test:'TESTNET (тест)', live:'РЕАЛЬНЫЙ (боевой)', '—':'—'};
+const MODE_LABEL = {dry:'DRY-RUN', test:'TESTNET', paper:'PAPER', live:'РЕАЛЬНЫЙ'};
+const MODE_CLASS = {dry:'dry', test:'test', paper:'test', live:'live'};
+const BROKER_NAME = {binance:'Binance · крипта', alpaca:'Alpaca · акции'};
+
 async function loadControl(){
   const info = await (await fetch('/api/control')).json();
-  const b = document.getElementById('modeBadge');
-  b.className = 'modeBadge m-' + (info.mode==='—'?'dry':info.mode);
-  b.textContent = MODE_LABEL[info.mode] + (info.running?'':' · стоп');
-  if(info.error){ b.textContent += ' ⚠'; b.title = info.error; }
+  const units = info.units||[];
+  let html = units.map(u=>`
+    <div class="pos-item">
+      <b>${BROKER_NAME[u.name]||u.name}</b>
+      <span class="modeBadge m-${MODE_CLASS[u.mode]||'dry'}" style="float:right">${MODE_LABEL[u.mode]||u.mode}${u.running?'':' · стоп'}</span>
+      <div class="muted" style="margin-top:6px">${(u.symbols||[]).join(', ')}</div>
+      <button class="btn" style="margin-top:8px" onclick="switchMode('${u.name}','${u.mode}')">Переключить режим</button>
+    </div>`).join('');
+  const errs = info.errors||{};
+  Object.keys(errs).forEach(k=> html += `<div class="pos-item" style="border-color:#7a2a2a"><b>${BROKER_NAME[k]||k}</b> ⚠<br><span class="muted">${errs[k]}</span></div>`);
+  document.getElementById('brokers').innerHTML = html || '<div class="muted">нет активных брокеров</div>';
 
   const p = await (await fetch('/api/positions')).json();
   document.getElementById('positions').innerHTML = (p.positions||[]).map(x=>{
-    if(!x.in_position) return `<div class="pos-item"><b>${x.symbol}</b> · вне позиции<br><span class="muted">цена ${(+x.price).toFixed(2)}</span></div>`;
+    const tag = `<span class="muted">[${x.broker||''}]</span> `;
+    if(!x.in_position) return `<div class="pos-item">${tag}<b>${x.symbol}</b> · вне позиции<br><span class="muted">цена ${(+x.price).toFixed(2)}</span></div>`;
     const u = +x.unrealized;
-    return `<div class="pos-item"><b>${x.symbol}</b> · ${(+x.qty).toFixed(6)}<br>
+    return `<div class="pos-item">${tag}<b>${x.symbol}</b> · ${(+x.qty).toFixed(6)}<br>
       вход ${(+x.avg_entry).toFixed(2)} · цена ${(+x.price).toFixed(2)}<br>
       <span class="${u>=0?'pos':'neg'}">${u>=0?'+':''}${u.toFixed(2)}$</span> · TP ${(+x.tp_price).toFixed(2)} · докупок ${x.safety_filled}</div>`;
   }).join('') || '<div class="muted">нет данных</div>';
 
   const orders = p.orders||[];
   document.getElementById('orders').innerHTML = orders.length
-    ? `<table><thead><tr><th>Пара</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th></tr></thead><tbody>`
-      + orders.map(o=>`<tr><td>${o.symbol}</td><td>${o.side}</td><td>${o.type}</td><td>${o.price}</td><td>${o.origQty}</td></tr>`).join('')
+    ? `<table><thead><tr><th>Брокер</th><th>Пара</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th></tr></thead><tbody>`
+      + orders.map(o=>`<tr><td>${o.broker||''}</td><td>${o.symbol}</td><td>${o.side}</td><td>${o.type}</td><td>${o.price}</td><td>${o.origQty}</td></tr>`).join('')
       + `</tbody></table>`
-    : '<div class="muted">нет открытых ордеров (или режим dry/testnet)</div>';
+    : '<div class="muted">нет открытых ордеров (или тест/paper-режим)</div>';
 }
 
-// Переключение режима
-document.getElementById('btnMode').onclick = async ()=>{
-  const info = await (await fetch('/api/control')).json();
-  const target = info.mode==='live' ? 'test' : 'live';
-  let msg = target==='live'
-    ? 'Перейти в РЕАЛЬНЫЙ режим? Ордера будут идти настоящими деньгами!'
-    : 'Перейти в TESTNET? Открытые боевые позиции будут ЗАКРЫТЫ (проданы в рынок).';
+// Переключение режима конкретного брокера
+async function switchMode(broker, curMode){
+  const toLive = curMode!=='live';
+  const target = toLive ? 'live' : (broker==='alpaca' ? 'paper' : 'test');
+  const msg = toLive
+    ? `[${broker}] Перейти в РЕАЛЬНЫЙ режим? Ордера пойдут настоящими деньгами!`
+    : `[${broker}] Вернуться в ${broker==='alpaca'?'PAPER':'TESTNET'}? Открытые боевые позиции будут ЗАКРЫТЫ (проданы в рынок).`;
   if(!confirm(msg)) return;
   const r = await (await fetch('/api/mode', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({target})})).json();
-  alert(r.ok ? ('Режим: '+(MODE_LABEL[r.mode]||r.mode)+(r.closed?` · закрыто позиций: ${r.closed}`:'')) : ('Ошибка: '+r.error));
+    body: JSON.stringify({broker, target})})).json();
+  alert(r.ok ? ('Готово'+(r.closed?` · закрыто позиций: ${r.closed}`:'')+(r.error?(' ⚠ '+r.error):'')) : ('Ошибка: '+r.error));
   loadControl();
-};
+}
 
 // Закрыть все позиции
 document.getElementById('btnFlatten').onclick = async ()=>{
@@ -275,8 +285,12 @@ document.getElementById('btnSettings').onclick = async ()=>{
     ADAPTIVE_ENABLED:'Адаптивный режим', POLL_INTERVAL_SECONDS:'Опрос, сек',
     WITHDRAW_ENABLED:'Автовывод вкл', WITHDRAW_PROFIT_PCT:'Вывод % прибыли', WITHDRAW_MIN_AMOUNT:'Вывод от, USDT',
     WITHDRAW_ASSET:'Вывод: монета', WITHDRAW_NETWORK:'Вывод: сеть', WITHDRAW_ADDRESS:'Вывод: адрес',
-    BINANCE_API_KEY:'Боевой API Key', BINANCE_API_SECRET:'Боевой API Secret',
-    BINANCE_TESTNET_API_KEY:'Testnet API Key', BINANCE_TESTNET_API_SECRET:'Testnet API Secret'};
+    BINANCE_ENABLED:'Binance вкл (true/false)',
+    BINANCE_API_KEY:'Binance боевой API Key', BINANCE_API_SECRET:'Binance боевой API Secret',
+    BINANCE_TESTNET_API_KEY:'Binance Testnet Key', BINANCE_TESTNET_API_SECRET:'Binance Testnet Secret',
+    ALPACA_ENABLED:'Alpaca/акции вкл (true/false)', ALPACA_PAPER:'Alpaca paper (true/false)',
+    ALPACA_SYMBOLS:'Акции через запятую (AAPL,MSFT)', ALPACA_TRADE_QUOTE_AMOUNT:'Бюджет акций, USD',
+    APCA_API_KEY_ID:'Alpaca API Key ID', APCA_API_SECRET_KEY:'Alpaca API Secret'};
   document.getElementById('settingsForm').innerHTML = Object.keys(s).map(k=>
     `<div class="field"><label>${labels[k]||k}</label><input data-k="${k}" value="${s[k]||''}"></div>`).join('');
   sOverlay.classList.add('show');

@@ -69,6 +69,9 @@ class Exchange:
                     if float(b["free"]) > 0}
         return {"can_trade": account.get("canTrade"), "balances": balances}
 
+    def market_open(self) -> bool:
+        return True  # крипторынок работает 24/7
+
     # ── Рыночные данные ────────────────────────────────────────────────
     def get_closes(self, symbol: str, interval: str, limit: int) -> list[float]:
         klines = self.client.get_klines(symbol=symbol, interval=interval, limit=limit)

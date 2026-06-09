@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from dotenv import load_dotenv
 
@@ -38,6 +38,13 @@ def _resolve_keys(testnet: bool) -> tuple[str, str]:
         sec = os.getenv("BINANCE_TESTNET_API_SECRET") or os.getenv("BINANCE_API_SECRET", "")
         return key, sec
     return os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", "")
+
+
+def _split_csv(raw: str) -> list[str]:
+    """Список символов через запятую, в верхнем регистре, без дублей."""
+    syms = [s.strip().upper() for s in (raw or "").split(",") if s.strip()]
+    seen: set[str] = set()
+    return [s for s in syms if not (s in seen or seen.add(s))]
 
 
 def _get_symbols() -> list[str]:
@@ -106,6 +113,15 @@ class Config:
 
     poll_interval_seconds: int
 
+    # Брокеры. Binance — крипта, Alpaca — акции (можно оба сразу).
+    binance_enabled: bool = True
+    alpaca_enabled: bool = False
+    alpaca_paper: bool = True
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
+    alpaca_symbols: list[str] = field(default_factory=list)
+    alpaca_trade_quote_amount: float = 1000.0
+
     @classmethod
     def load(cls) -> "Config":
         testnet = _get_bool("TESTNET", True)
@@ -150,9 +166,31 @@ class Config:
             regime_slope_pct=_get_float("REGIME_SLOPE_PCT", 0.6),
             regime_high_vol_pct=_get_float("REGIME_HIGH_VOL_PCT", 2.5),
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
+            binance_enabled=_get_bool("BINANCE_ENABLED", True),
+            alpaca_enabled=_get_bool("ALPACA_ENABLED", False),
+            alpaca_paper=_get_bool("ALPACA_PAPER", True),
+            alpaca_api_key=os.getenv("APCA_API_KEY_ID", "").strip(),
+            alpaca_api_secret=os.getenv("APCA_API_SECRET_KEY", "").strip(),
+            alpaca_symbols=_split_csv(os.getenv("ALPACA_SYMBOLS", "")),
+            alpaca_trade_quote_amount=_get_float("ALPACA_TRADE_QUOTE_AMOUNT", 1000.0),
         )
         cfg.validate()
         return cfg
+
+    def for_alpaca(self) -> "Config":
+        """Производный конфиг для DCA-трейдера на Alpaca: акции, свои символы и
+        бюджет, без комиссии и без крипто-вывода. paper → testnet-семантика."""
+        return replace(
+            self,
+            symbols=self.alpaca_symbols or ["AAPL"],
+            trade_quote_amount=self.alpaca_trade_quote_amount,
+            fee_pct=0.0,
+            dry_run=False,
+            testnet=self.alpaca_paper,
+            api_key=self.alpaca_api_key,
+            api_secret=self.alpaca_api_secret,
+            withdraw_enabled=False,
+        )
 
     @property
     def symbol(self) -> str:
