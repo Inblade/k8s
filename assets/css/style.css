@@ -6,18 +6,20 @@
    ============================================================ */
 
 :root {
-  /* --- Colours (change these to re-theme the whole site) --- */
-  --color-bg: #fbf9f6;          /* page background (soft paper) */
+  /* --- Colours (taken from the original jkochetova.com) --- */
+  --color-bg: #faf7f2;          /* page background (warm paper) */
   --color-surface: #ffffff;     /* cards / panels */
-  --color-text: #2b2b2b;        /* main text */
-  --color-muted: #6f6a64;       /* secondary text */
-  --color-accent: #5a8a9a;      /* watercolour blue-teal */
-  --color-accent-soft: #e7eef0; /* light accent background */
-  --color-warm: #c08457;        /* warm terracotta highlight */
+  --color-text: #31312f;        /* main text (slate) */
+  --color-muted: #8f8f8f;       /* secondary text (grey) */
+  --color-accent: #2e6e8e;      /* watercolour teal-blue */
+  --color-accent-soft: #e6eef2; /* light accent background */
+  --color-warm: #c97b5a;        /* warm terracotta highlight */
   --color-line: #e7e2db;        /* hairlines / borders */
 
   /* --- Fonts --- */
   --font-display: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+  --font-serif: "Libre Baskerville", Georgia, serif;
+  --font-script: "Mrs Saint Delafield", cursive;
   --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   /* --- Layout --- */
@@ -72,18 +74,40 @@ p { margin: 0 0 1em; }
   display: flex; align-items: center; justify-content: space-between;
   height: 72px;
 }
-.brand {
-  font-family: var(--font-display);
-  font-size: 1.5rem; font-weight: 600; letter-spacing: 0.5px;
-  color: var(--color-text);
-}
+.brand { display: block; line-height: 1; color: var(--color-text); }
 .brand:hover { text-decoration: none; color: var(--color-accent); }
-.brand small { display: block; font-family: var(--font-body); font-size: 0.7rem; letter-spacing: 2px; text-transform: uppercase; color: var(--color-muted); }
+.brand .brand-name {
+  font-family: var(--font-script);
+  font-size: 2.2rem; line-height: 0.9; color: inherit;
+}
+.brand small {
+  display: block; font-family: var(--font-body);
+  font-size: 0.62rem; letter-spacing: 3px; text-transform: uppercase;
+  color: var(--color-muted); margin-top: 2px;
+}
 
-.nav-links { display: flex; gap: 28px; list-style: none; margin: 0; padding: 0; }
-.nav-links a { color: var(--color-text); font-size: 0.95rem; }
+.nav-links { display: flex; gap: 24px; list-style: none; margin: 0; padding: 0; align-items: center; }
+.nav-links > li { position: relative; }
+.nav-links a { color: var(--color-text); font-size: 0.92rem; white-space: nowrap; }
 .nav-links a:hover { color: var(--color-accent); text-decoration: none; }
-.nav-links a.is-active { color: var(--color-accent); border-bottom: 2px solid var(--color-accent); padding-bottom: 4px; }
+.nav-links a.is-active { color: var(--color-accent); }
+
+/* Dropdown submenus */
+.has-sub > a::after { content: " \25be"; font-size: 0.8em; color: var(--color-muted); }
+.submenu {
+  position: absolute; top: 100%; left: -14px; min-width: 230px;
+  list-style: none; margin: 0; padding: 8px 0;
+  background: var(--color-surface); border: 1px solid var(--color-line);
+  border-radius: 8px; box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; transform: translateY(6px);
+  transition: opacity .15s ease, transform .15s ease; z-index: 60;
+}
+.has-sub:hover > .submenu, .has-sub:focus-within > .submenu {
+  opacity: 1; visibility: visible; transform: translateY(0);
+}
+.submenu li { width: 100%; }
+.submenu a { display: block; padding: 9px 18px; font-size: 0.9rem; }
+.submenu a:hover { background: var(--color-accent-soft); }
 
 .nav-toggle {
   display: none; background: none; border: 0; cursor: pointer;
@@ -176,16 +200,54 @@ p { margin: 0 0 1em; }
   .split { grid-template-columns: 1fr; gap: 28px; }
   .footer-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 640px) {
-  .grid--3, .grid--2 { grid-template-columns: 1fr; }
+@media (max-width: 900px) {
   .nav-toggle { display: block; }
   .nav-links {
     position: absolute; top: 72px; left: 0; right: 0;
-    flex-direction: column; gap: 0; background: var(--color-bg);
+    flex-direction: column; gap: 0; align-items: stretch; background: var(--color-bg);
     border-bottom: 1px solid var(--color-line);
-    max-height: 0; overflow: hidden; transition: max-height .25s ease;
+    max-height: 0; overflow: hidden auto; transition: max-height .3s ease;
   }
-  .nav-links.is-open { max-height: 400px; }
-  .nav-links li { width: 100%; border-top: 1px solid var(--color-line); }
+  .nav-links.is-open { max-height: 80vh; }
+  .nav-links > li { width: 100%; border-top: 1px solid var(--color-line); }
   .nav-links a { display: block; padding: 14px 24px; }
+  /* show submenus inline on mobile */
+  .submenu {
+    position: static; opacity: 1; visibility: visible; transform: none;
+    border: 0; box-shadow: none; border-radius: 0; padding: 0; min-width: 0;
+    background: var(--color-accent-soft);
+  }
+  .submenu a { padding-left: 40px; }
+  .has-sub > a::after { float: right; }
 }
+@media (max-width: 640px) {
+  .grid--3, .grid--2 { grid-template-columns: 1fr; }
+}
+
+/* ---- Homepage hero (slate) ---- */
+.hero--slate {
+  background: #31312f; color: #f3efe9; text-align: center;
+  padding: 96px 0 88px;
+}
+.hero--slate .eyebrow {
+  font-family: var(--font-body); text-transform: uppercase;
+  letter-spacing: 4px; font-size: 0.72rem; color: #c7c3bc; margin-bottom: 10px;
+}
+.hero--slate .hero-name {
+  font-family: var(--font-script); font-size: clamp(3.4rem, 9vw, 6rem);
+  line-height: 0.9; color: #fff; margin: 0 0 10px;
+}
+.hero--slate .hero-sub { font-family: var(--font-display); font-size: clamp(1.3rem,3vw,1.9rem); color: #e7e2db; margin-bottom: 28px; }
+.hero--slate .btn--ghost { color: #fff; border-color: rgba(255,255,255,.5); }
+.hero--slate .btn--ghost:hover { background: rgba(255,255,255,.12); color: #fff; }
+
+/* ---- Quote block ---- */
+.quote {
+  font-family: var(--font-serif); font-style: italic;
+  font-size: clamp(1.2rem, 2.4vw, 1.7rem); line-height: 1.5;
+  max-width: 50ch; margin: 0 auto 0.6em; color: var(--color-text);
+}
+.quote-author { font-family: var(--font-display); color: var(--color-muted); letter-spacing: 1px; }
+
+/* diamond brand mark */
+.diamond { color: var(--color-accent); letter-spacing: -2px; }

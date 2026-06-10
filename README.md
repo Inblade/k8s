@@ -15,16 +15,29 @@ changed. Full plain-language guide (in Russian):
   `assets/css/style.css`.
 - Photos go in `assets/images/`.
 
-## Pages
+## Pages (match the original site menu)
 | Page | File |
 |------|------|
 | Home | `index.html` |
-| Step by Step project | `step-by-step.html` |
-| Rules of participation | `rules.html` |
-| Finalists | `participants.html` |
-| Festival programme | `festival.html` |
-| Gold Edition | `gold-edition.html` |
+| About | `about.html` |
+| Step by Step | `step-by-step.html` |
+| — How to apply | `how-to-apply.html` |
+| — Jury | `jury.html` |
+| — Programme | `programme.html` |
+| — Past winners | `past-winners.html` |
+| — Festival 2024 | `festival.html` |
+| Blog | `blog.html` |
+| Works | `works.html` |
+| Projects | `projects.html` |
+| — IWET · Our Wonderful World | `project-iwet.html` |
+| — Christmas Light | `project-christmas-light.html` |
+| — Gold Edition | `gold-edition.html` |
 | Contact | `contact.html` |
+
+The look (paper `#faf7f2`, slate `#31312f`, teal `#2e6e8e`, script logo, Cormorant
+Garamond + Inter fonts) is taken from the original jkochetova.com and lives in
+`assets/css/style.css`. Real homepage text and the portrait photo are already in
+place; pages marked with a yellow `ЗАМЕНИТЬ` tag still need their content.
 
 ## Hosting (free)
 The site is ready for **GitHub Pages**. Enable it once under
