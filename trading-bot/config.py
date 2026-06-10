@@ -152,6 +152,10 @@ class Config:
     dca_trend_ma_period: int = 200
     dca_trend_interval: str = "1d"
 
+    # Потолок доли крипты в портфеле (ядро-спутник): крипта волатильна, поэтому
+    # ограничиваем её вес. Используется для рекомендации распределения бюджета.
+    crypto_max_weight: float = 0.15
+
     # ATR-привязка шага/тейк-профита: вместо фиксированных % шаг и цель считаются
     # от недавней волатильности (среднее абсолютное изменение закрытий, %).
     # Работает, только когда адаптивный режим ВЫКЛ. Перекрывает price_deviation/TP.
@@ -245,6 +249,7 @@ class Config:
             dca_trend_filter_enabled=_get_bool("DCA_TREND_FILTER_ENABLED", False),
             dca_trend_ma_period=_get_int("DCA_TREND_MA_PERIOD", 200),
             dca_trend_interval=os.getenv("DCA_TREND_INTERVAL", "1d"),
+            crypto_max_weight=_get_float("CRYPTO_MAX_WEIGHT", 0.15),
         )
         cfg.validate()
         return cfg

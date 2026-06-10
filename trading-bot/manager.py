@@ -143,6 +143,7 @@ class BotManager:
                 "mode": _mode_of(u.name, u.trader),
                 "running": u.thread.is_alive(),
                 "symbols": list(u.trader.cfg.symbols),
+                "budget": u.trader.cfg.trade_quote_amount,
             } for u in self.units]
         return {"running": self.running, "units": units, "error": self.error,
                 "errors": self.errors}
@@ -181,6 +182,21 @@ class BotManager:
             except Exception as exc:  # noqa: BLE001
                 log.error("Ордера (%s) недоступны: %s", u.name, exc)
         return out
+
+    def allocation(self) -> dict:
+        """Текущее vs рекомендуемое распределение бюджета по волатильности."""
+        from portfolio import ASSET_CLASS_VOL, split_budget
+        with self._lock:
+            units = [(u.name, u.trader.cfg.trade_quote_amount) for u in self.units]
+            cmw = self.cfg.crypto_max_weight if self.cfg else 0.15
+        if not units:
+            return {"enabled": False}
+        current = {n: b for n, b in units}
+        total = round(sum(current.values()), 2)
+        vols = {n: ASSET_CLASS_VOL.get(n, 30.0) for n, _ in units}
+        return {"enabled": True, "total": total, "current": current,
+                "recommended": split_budget(total, vols, cmw),
+                "crypto_max_weight": cmw}
 
     def backtest(self, source: str, symbol: str, interval: str, limit: int) -> dict:
         """Прогон DCA-стратегии брокера по историческим барам символа."""

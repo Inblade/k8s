@@ -729,6 +729,38 @@ class TestOverviewAndBacktest(unittest.TestCase):
         self.assertIn("error", BotManager().backtest("alpaca", "AAPL", "1d", 80))
 
 
+# ─────────────────────────── распределение по волатильности ───────────────────────────
+class TestPortfolio(unittest.TestCase):
+    def test_crypto_capped(self):
+        from portfolio import inverse_vol_weights
+        w = inverse_vol_weights({"binance": 60.0, "alpaca": 18.0}, crypto_max=0.15)
+        self.assertAlmostEqual(w["binance"], 0.15, places=4)        # крипта прижата к потолку
+        self.assertAlmostEqual(w["alpaca"], 0.85, places=4)        # остаток акциям
+        self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
+
+    def test_inverse_vol_without_cap_breach(self):
+        # если по обратной вол. крипта и так ниже потолка — не трогаем
+        from portfolio import inverse_vol_weights
+        w = inverse_vol_weights({"binance": 100.0, "alpaca": 20.0}, crypto_max=0.30)
+        self.assertLess(w["binance"], w["alpaca"])                  # волатильному меньше
+        self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
+
+    def test_single_broker_gets_all(self):
+        from portfolio import split_budget
+        self.assertEqual(split_budget(1000.0, {"alpaca": 18.0}), {"alpaca": 1000.0})
+
+    def test_split_budget_crypto_small(self):
+        from portfolio import split_budget
+        s = split_budget(1000.0, {"binance": 60.0, "alpaca": 18.0}, crypto_max=0.15)
+        self.assertAlmostEqual(s["binance"], 150.0, places=2)
+        self.assertAlmostEqual(s["alpaca"], 850.0, places=2)
+
+    def test_allocation_endpoint_no_units(self):
+        import dashboard
+        r = dashboard.app.test_client().get("/api/allocation").get_json()
+        self.assertFalse(r["enabled"])
+
+
 # ─────────────────────────── manager (без сети) ───────────────────────────
 class TestManager(unittest.TestCase):
     def test_fresh_info(self):

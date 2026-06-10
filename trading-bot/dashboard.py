@@ -92,6 +92,8 @@ PAGE = """
     <div id="brokers"><div class="muted">—</div></div>
     <h3>Итоги по брокерам</h3>
     <div id="overview"><div class="muted">—</div></div>
+    <h3>Распределение бюджета</h3>
+    <div id="allocation"><div class="muted">—</div></div>
     <h3>Действия</h3>
     <button class="btn" id="btnSettings">⚙ Настройки</button>
     <button class="btn" id="btnBacktest">📊 Бэктест акций</button>
@@ -283,6 +285,24 @@ async function loadControl(){
       сегодня <span class="${d>=0?'pos':'neg'}">${d>=0?'+':''}${d.toFixed(2)}$</span></div>`;
   }).join('') : '<div class="muted">нет данных</div>';
 
+  const al = await (await fetch('/api/allocation')).json();
+  const ael = document.getElementById('allocation');
+  if(!al.enabled){ ael.innerHTML = '<div class="muted">нет активных брокеров</div>'; }
+  else {
+    const pct = v => al.total ? (100*v/al.total).toFixed(0) : 0;
+    let drift = false;
+    let rows = Object.keys(al.current).map(n=>{
+      const cur = al.current[n], rec = al.recommended[n]||0;
+      if(Math.abs(cur-rec) > 0.05*al.total) drift = true;
+      return `<div style="font-size:12px;margin:3px 0">${BROKER_NAME[n]||n}:
+        <b>$${cur.toFixed(0)}</b> (${pct(cur)}%) → реком. <b>$${rec.toFixed(0)}</b> (${pct(rec)}%)</div>`;
+    }).join('');
+    rows += `<div class="muted" style="margin-top:6px">По обратной волатильности, крипта ≤ ${(al.crypto_max_weight*100).toFixed(0)}%.`
+      + (drift ? ' ⚠ Текущее распределение далеко от рекомендуемого — поправь бюджеты в Настройках.' : ' ✓ Близко к рекомендуемому.')
+      + '</div>';
+    ael.innerHTML = rows;
+  }
+
   const p = await (await fetch('/api/positions')).json();
   document.getElementById('positions').innerHTML = (p.positions||[]).map(x=>{
     const tag = `<span class="muted">[${x.broker||''}]</span> `;
@@ -458,6 +478,11 @@ def overview():
             "day_pnl": _day_pnl(rows),
         })
     return jsonify(out)
+
+
+@app.route("/api/allocation")
+def allocation():
+    return jsonify(manager.allocation())
 
 
 @app.route("/api/backtest")
