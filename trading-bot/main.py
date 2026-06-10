@@ -60,6 +60,45 @@ def _build_alpaca(cfg: Config, log: logging.Logger):
     return DcaTrader(acfg, broker, source="alpaca")
 
 
+def apply_auto_allocation(cfg: Config) -> Config:
+    """Перераспределяет общий бюджет между Binance/Alpaca по обратной волатильности
+    (крипта ≤ CRYPTO_MAX_WEIGHT). Масштабирует размеры ордеров тем же множителем,
+    чтобы соотношение бюджет/ордера осталось валидным. Чистая функция (без сети)."""
+    from dataclasses import replace
+
+    from config import STOCK_DCA_DEFAULTS
+    from portfolio import ASSET_CLASS_VOL, split_budget
+
+    if not cfg.allocation_auto:
+        return cfg
+    budgets = {}
+    if cfg.binance_enabled:
+        budgets["binance"] = cfg.trade_quote_amount
+    if cfg.alpaca_enabled:
+        budgets["alpaca"] = cfg.alpaca_trade_quote_amount
+    if len(budgets) < 2:
+        return cfg  # распределять нечего
+    total = sum(budgets.values())
+    vols = {n: ASSET_CLASS_VOL[n] for n in budgets}
+    split = split_budget(total, vols, cfg.crypto_max_weight)
+
+    kb = split["binance"] / cfg.trade_quote_amount if cfg.trade_quote_amount else 1.0
+    ka = split["alpaca"] / cfg.alpaca_trade_quote_amount if cfg.alpaca_trade_quote_amount else 1.0
+    a_base = cfg.alpaca_dca_base_order if cfg.alpaca_dca_base_order is not None \
+        else STOCK_DCA_DEFAULTS["base_order"]
+    a_safety = cfg.alpaca_dca_safety_order if cfg.alpaca_dca_safety_order is not None \
+        else STOCK_DCA_DEFAULTS["safety_order"]
+    return replace(
+        cfg,
+        trade_quote_amount=split["binance"],
+        dca_base_order=cfg.dca_base_order * kb,
+        dca_safety_order=cfg.dca_safety_order * kb,
+        alpaca_trade_quote_amount=split["alpaca"],
+        alpaca_dca_base_order=a_base * ka,
+        alpaca_dca_safety_order=a_safety * ka,
+    )
+
+
 def create_traders(cfg: Config, log: logging.Logger) -> tuple[list, dict]:
     """Собирает трейдеры для всех включённых брокеров.
 
@@ -68,6 +107,10 @@ def create_traders(cfg: Config, log: logging.Logger) -> tuple[list, dict]:
     """
     units: list = []
     errors: dict = {}
+    cfg = apply_auto_allocation(cfg)  # ядро-спутник: бюджеты по волатильности
+    if cfg.allocation_auto and cfg.binance_enabled and cfg.alpaca_enabled:
+        log.info("Авто-распределение: крипта=%.0f, акции=%.0f USD",
+                 cfg.trade_quote_amount, cfg.alpaca_trade_quote_amount)
     if cfg.binance_enabled:
         try:
             units.append(("binance", create_trader(cfg, log)))

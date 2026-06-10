@@ -353,6 +353,7 @@ document.getElementById('btnSettings').onclick = async ()=>{
     DCA_STOP_LOSS_PCT:'DCA стоп-лосс % (0=выкл)', DCA_ATR_ENABLED:'ATR-привязка шага (true/false)',
     DCA_TREND_FILTER_ENABLED:'Трендовый фильтр 200-MA (true/false)',
     ADAPTIVE_ENABLED:'Адаптивный режим', POLL_INTERVAL_SECONDS:'Опрос, сек',
+    ALLOCATION_AUTO:'Авто-распределение бюджета (true/false)', CRYPTO_MAX_WEIGHT:'Потолок доли крипты (0.15=15%)',
     WITHDRAW_ENABLED:'Автовывод вкл', WITHDRAW_PROFIT_PCT:'Вывод % прибыли', WITHDRAW_MIN_AMOUNT:'Вывод от, USDT',
     WITHDRAW_ASSET:'Вывод: монета', WITHDRAW_NETWORK:'Вывод: сеть', WITHDRAW_ADDRESS:'Вывод: адрес',
     BINANCE_ENABLED:'Binance вкл (true/false)',

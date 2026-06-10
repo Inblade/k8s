@@ -760,6 +760,34 @@ class TestPortfolio(unittest.TestCase):
         r = dashboard.app.test_client().get("/api/allocation").get_json()
         self.assertFalse(r["enabled"])
 
+    def test_auto_allocation_scales_and_validates(self):
+        from main import apply_auto_allocation
+        # равные бюджеты крипта/акции → крипта прижимается к 15%
+        cfg = dataclasses.replace(
+            make_cfg(symbols=["BTCUSDT"]), allocation_auto=True,
+            binance_enabled=True, alpaca_enabled=True,
+            trade_quote_amount=500.0, alpaca_trade_quote_amount=500.0,
+            alpaca_symbols=["SPY"], alpaca_api_key="k", alpaca_api_secret="s")
+        out = apply_auto_allocation(cfg)
+        self.assertAlmostEqual(out.trade_quote_amount, 150.0, places=1)   # 15% от 1000
+        self.assertAlmostEqual(out.alpaca_trade_quote_amount, 850.0, places=1)
+        # размеры ордеров масштабированы тем же множителем (kb=0.3)
+        self.assertAlmostEqual(out.dca_base_order, cfg.dca_base_order * 0.3, places=4)
+        # валидация бюджета не падает после масштабирования
+        out.validate()
+        out.for_alpaca().validate()
+
+    def test_auto_allocation_off_unchanged(self):
+        from main import apply_auto_allocation
+        cfg = make_cfg(symbols=["BTCUSDT"])  # allocation_auto=False
+        self.assertIs(apply_auto_allocation(cfg), cfg)
+
+    def test_auto_allocation_single_broker_noop(self):
+        from main import apply_auto_allocation
+        cfg = dataclasses.replace(make_cfg(symbols=["BTCUSDT"]),
+                                  allocation_auto=True, alpaca_enabled=False)
+        self.assertIs(apply_auto_allocation(cfg), cfg)
+
 
 # ─────────────────────────── manager (без сети) ───────────────────────────
 class TestManager(unittest.TestCase):

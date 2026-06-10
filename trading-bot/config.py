@@ -155,6 +155,9 @@ class Config:
     # Потолок доли крипты в портфеле (ядро-спутник): крипта волатильна, поэтому
     # ограничиваем её вес. Используется для рекомендации распределения бюджета.
     crypto_max_weight: float = 0.15
+    # Авто-применение распределения: бот сам выставит бюджеты брокеров по обратной
+    # волатильности (и пропорционально масштабирует размеры ордеров).
+    allocation_auto: bool = False
 
     # ATR-привязка шага/тейк-профита: вместо фиксированных % шаг и цель считаются
     # от недавней волатильности (среднее абсолютное изменение закрытий, %).
@@ -250,6 +253,7 @@ class Config:
             dca_trend_ma_period=_get_int("DCA_TREND_MA_PERIOD", 200),
             dca_trend_interval=os.getenv("DCA_TREND_INTERVAL", "1d"),
             crypto_max_weight=_get_float("CRYPTO_MAX_WEIGHT", 0.15),
+            allocation_auto=_get_bool("ALLOCATION_AUTO", False),
         )
         cfg.validate()
         return cfg
