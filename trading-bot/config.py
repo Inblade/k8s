@@ -186,7 +186,7 @@ class Config:
     alpaca_dca_stop_loss_pct: float | None = None
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls, strict: bool = True) -> "Config":
         testnet = _get_bool("TESTNET", True)
         api_key, api_secret = _resolve_keys(testnet)
         cfg = cls(
@@ -255,7 +255,8 @@ class Config:
             crypto_max_weight=_get_float("CRYPTO_MAX_WEIGHT", 0.15),
             allocation_auto=_get_bool("ALLOCATION_AUTO", False),
         )
-        cfg.validate()
+        if strict:
+            cfg.validate()
         return cfg
 
     def for_alpaca(self) -> "Config":

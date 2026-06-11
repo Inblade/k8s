@@ -484,6 +484,16 @@ class TestConfigKeys(unittest.TestCase):
         with mock.patch.dict(os.environ, {"BINANCE_ENABLED": "false"}, clear=False):
             self.assertFalse(_get_bool("BINANCE_ENABLED", True))
 
+    def test_load_strict_false_skips_validation(self):
+        # кривой бюджет (ордера > бюджет) не должен ронять загрузку при strict=False
+        env = {"SYMBOL": "BTCUSDT", "TRADE_QUOTE_AMOUNT": "75", "DCA_BASE_ORDER": "30",
+               "DCA_SAFETY_ORDER": "30", "DCA_MAX_SAFETY_ORDERS": "5",
+               "DRY_RUN": "true", "TESTNET": "true", "STRATEGY": "dca"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            Config.load(strict=False)            # не бросает
+            with self.assertRaises(ValueError):  # strict всё ещё ловит
+                Config.load()
+
     def test_testnet_fallback_to_main(self):
         env = {"TESTNET": "true", "DRY_RUN": "false", "STRATEGY": "dca",
                "SYMBOL": "BTCUSDT", "TRADE_QUOTE_AMOUNT": "1000",

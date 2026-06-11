@@ -19,7 +19,9 @@ from config import Config
 from manager import instance as manager
 
 app = Flask(__name__)
-cfg = Config.load()
+# Без strict: невалидный конфиг (например, бюджет < размера ордеров) не должен
+# ронять импорт всего приложения — ошибку покажет менеджер в окне (/api/control).
+cfg = Config.load(strict=False)
 
 PAGE = """
 <!doctype html>
