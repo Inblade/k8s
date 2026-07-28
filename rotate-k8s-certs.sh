@@ -7,7 +7,7 @@ THRESHOLD_DAYS=7
 ADMIN_KUBECONFIG="/etc/kubernetes/admin.conf"
 BACKUP_DIR="/var/backups/k8s-certs"
 TMP_DIR="/tmp/k8s-rotate"
-SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"  # <= ЗАМЕНИ НА СВОЙ
+SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"  # <= replace with your webhook
 HOSTNAME="$(hostname)"
 TIMESTAMP="$(date +%F-%H%M%S)"
 
