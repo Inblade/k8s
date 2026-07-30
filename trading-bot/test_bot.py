@@ -738,6 +738,38 @@ class TestOverviewAndBacktest(unittest.TestCase):
         self.assertIn("error", BotManager().backtest("BTCUSDT", "1d", 80))
 
 
+# ─────────────────────────── блокировка одного экземпляра ───────────────────────────
+class TestAppLock(unittest.TestCase):
+    def setUp(self):
+        self.path = DIR / "test.lock"
+        self.path.unlink(missing_ok=True)
+
+    def tearDown(self):
+        self.path.unlink(missing_ok=True)
+
+    def test_second_acquire_fails(self):
+        import applock
+        fh = applock.acquire(self.path)
+        try:
+            with self.assertRaises(applock.AlreadyRunning):
+                applock.acquire(self.path)
+        finally:
+            fh.close()
+
+    def test_lock_released_after_close(self):
+        import applock
+        applock.acquire(self.path).close()      # освободили
+        applock.acquire(self.path).close()      # повторный захват проходит
+
+    def test_lock_records_pid(self):
+        import applock
+        fh = applock.acquire(self.path)
+        try:
+            self.assertEqual(self.path.read_text().strip(), str(os.getpid()))
+        finally:
+            fh.close()
+
+
 # ─────────────────────────── manager (без сети) ───────────────────────────
 class TestManager(unittest.TestCase):
     def test_fresh_info(self):

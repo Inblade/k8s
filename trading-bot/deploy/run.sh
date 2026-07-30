@@ -18,4 +18,6 @@ fi
 
 # caffeinate флаги: -i не спать в простое, -m диски не спят, -s не спать на питании.
 # exec — чтобы launchd следил именно за этим процессом.
-exec caffeinate -ims "$PY" main.py
+# --headless: без окна (окно под launchd переоткрывалось бы после каждого закрытия);
+# дашборд при этом доступен в браузере на http://localhost:8000
+exec caffeinate -ims "$PY" app.py --headless

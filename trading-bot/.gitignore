@@ -14,3 +14,4 @@ bot.log
 logs/
 .venv/
 venv/
+.bot.lock
