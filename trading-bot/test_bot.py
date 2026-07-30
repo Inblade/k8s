@@ -1,6 +1,10 @@
 """Тесты бота. Запуск: python -m unittest test_bot -v  (из папки trading-bot)
 
 Сеть не используется: биржа подменяется фейками/моками.
+
+ВАЖНО: тесты пишут и удаляют файлы состояния, поэтому все пути перенаправлены во
+ВРЕМЕННУЮ папку. Иначе прогон тестов затёр бы рабочие журналы и состояние
+открытых позиций живого бота.
 """
 from __future__ import annotations
 
@@ -8,18 +12,32 @@ import dataclasses
 import json
 import logging
 import os
-import types
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import adaptive
+import dca_trader
 import journal
+import trader as trader_mod
+import withdrawal
 from config import Config
 from dca import (Action, DcaEngine, DcaParams, simulate_dca)
 from regime import Regime, detect_regime
 from strategy import Indicators, Signal, decide, rsi, sma
 
-DIR = Path(__file__).parent
+# ── Изоляция: все файлы состояния/журналов — во временной папке ──────────
+DIR = Path(tempfile.mkdtemp(prefix="tradingbot-tests-"))
+journal.DIR = DIR
+journal.TRADES_CSV = DIR / "trades.csv"
+journal.EQUITY_CSV = DIR / "equity.csv"
+dca_trader.DIR = DIR
+dca_trader.STATUS_FILE = DIR / "status.json"
+withdrawal.STATE_FILE = DIR / "withdraw_state.json"
+adaptive.STATE_FILE = DIR / "adaptive_state.json"
+trader_mod.STATE_FILE = DIR / "state.json"
+
 ARTIFACTS = ["trades.csv", "equity.csv", "withdraw_state.json", "adaptive_state.json",
              "status.json", "state.json"]
 
@@ -27,12 +45,9 @@ ARTIFACTS = ["trades.csv", "equity.csv", "withdraw_state.json", "adaptive_state.
 def cleanup() -> None:
     for name in ARTIFACTS:
         (DIR / name).unlink(missing_ok=True)
-    for p in DIR.glob("dca_state_*.json"):
-        p.unlink(missing_ok=True)
-    for p in DIR.glob("status_*.json"):
-        p.unlink(missing_ok=True)
-    for p in DIR.glob("*.bak"):
-        p.unlink(missing_ok=True)
+    for pattern in ("dca_state_*.json", "status_*.json", "*.bak"):
+        for p in DIR.glob(pattern):
+            p.unlink(missing_ok=True)
 
 
 # Полный набор полей Config с дефолтами, чтобы строить конфиг без окружения.
@@ -578,11 +593,11 @@ class TestSourceTagging(unittest.TestCase):
         from dca_trader import DcaTrader
         ex = FakeExchange()
         ex.set_price(100)
-        DcaTrader(make_cfg(symbols=["BTCUSDT"]), ex, source="alpaca").step()
+        DcaTrader(make_cfg(symbols=["BTCUSDT"]), ex).step()
         trades = journal.read_csv(journal.TRADES_CSV)
         equity = journal.read_csv(journal.EQUITY_CSV)
-        self.assertTrue(trades and all(r["source"] == "alpaca" for r in trades))
-        self.assertTrue(equity and all(r["source"] == "alpaca" for r in equity))
+        self.assertTrue(trades and all(r["source"] == "binance" for r in trades))
+        self.assertTrue(equity and all(r["source"] == "binance" for r in equity))
 
 
 # ─────────────────────────── стоп-лосс + ATR-привязка ───────────────────────────
@@ -642,7 +657,7 @@ class TestStopLossAndAtr(unittest.TestCase):
         cfg = make_cfg(symbols=["AAA", "BBB"], dca_atr_enabled=True,
                        dca_atr_step_mult=1.0, dca_atr_tp_mult=2.0)
         ex = FakeExchange(closes=[100, 103, 100, 103, 100, 103])  # ~3% волатильность
-        t = DcaTrader(cfg, ex, source="alpaca")
+        t = DcaTrader(cfg, ex)
         before_bbb = t.engines["BBB"].p.price_deviation_pct
         t._apply_atr_spacing("AAA")
         self.assertNotEqual(t.engines["AAA"].p.price_deviation_pct, before_bbb)
@@ -679,17 +694,6 @@ class TestTrendFilter(unittest.TestCase):
         self.assertEqual(ex.bought, [])
 
 
-class TestStockDefaults(unittest.TestCase):
-    def test_stock_defaults_have_stoploss_and_tight_step(self):
-        from config import STOCK_DCA_DEFAULTS
-        cfg = dataclasses.replace(make_cfg(symbols=["BTCUSDT"]),
-                                  alpaca_api_key="k", alpaca_api_secret="s")
-        a = cfg.for_alpaca()
-        self.assertEqual(a.symbols, ["SPY", "QQQ"])  # безопасные ETF по умолчанию
-        self.assertEqual(a.dca_stop_loss_pct, STOCK_DCA_DEFAULTS["stop_loss_pct"])
-        self.assertEqual(a.dca_price_deviation_pct, 1.5)
-
-
 # ─────────────────────────── overview + бэктест ───────────────────────────
 class TestOverviewAndBacktest(unittest.TestCase):
     def setUp(self): cleanup()
@@ -698,105 +702,40 @@ class TestOverviewAndBacktest(unittest.TestCase):
     def test_overview_and_day_pnl(self):
         import dashboard
         # день P&L = изменение (реализ.+нереализ.), НЕ зависит от прыжка бюджета
-        journal.record_equity(100, 0, 0, 0, 0, 1000.0, 0, 0, source="binance")
-        journal.record_equity(100, 0, 0, 10, 0, 1010.0, 0, 0, source="binance")
-        journal.record_equity(150, 0, 0, 0, 0, 2000.0, 0, 0, source="alpaca")
+        journal.record_equity(100, 0, 0, 0, 0, 1000.0, 0, 0)
+        journal.record_equity(100, 0, 0, 10, 0, 1010.0, 0, 0)
         c = dashboard.app.test_client()
-        ov = {o["source"]: o for o in c.get("/api/overview").get_json()}
-        self.assertEqual(ov["binance"]["equity"], 1010.0)
-        self.assertEqual(ov["binance"]["day_pnl"], 10.0)
-        self.assertEqual(ov["alpaca"]["equity"], 2000.0)
-        d = c.get("/api/data?source=binance").get_json()
+        ov = c.get("/api/overview").get_json()
+        self.assertEqual(ov[0]["equity"], 1010.0)
+        self.assertEqual(ov[0]["day_pnl"], 10.0)
+        d = c.get("/api/data").get_json()
         self.assertEqual(d["summary"]["day_pnl"], 10.0)
 
     def test_day_pnl_ignores_budget_jump(self):
         # equity прыгает 1000→250 (смена бюджета), но P&L-компоненты почти не
         # изменились → день P&L должен быть ~0, а не −750
         import dashboard
-        journal.record_equity(100, 0, 0, -0.5, 0, 1000.0, 0, 0, source="alpaca")
-        journal.record_equity(100, 0, 0, -0.8, 0, 250.0, 0, 0, source="alpaca")
-        c = dashboard.app.test_client()
-        ov = {o["source"]: o for o in c.get("/api/overview").get_json()}
-        self.assertAlmostEqual(ov["alpaca"]["day_pnl"], -0.3, places=2)
+        journal.record_equity(100, 0, 0, -0.5, 0, 1000.0, 0, 0)
+        journal.record_equity(100, 0, 0, -0.8, 0, 250.0, 0, 0)
+        ov = dashboard.app.test_client().get("/api/overview").get_json()
+        self.assertAlmostEqual(ov[0]["day_pnl"], -0.3, places=2)
 
     def test_backtest_via_manager(self):
-        import threading
-        from manager import BotManager, Unit
+        from manager import BotManager
         from dca_trader import DcaTrader
         prices = [100 - i * 0.5 for i in range(40)] + [80 + i for i in range(40)]
         ex = FakeExchange(closes=prices, dry_run=False)
-        trader = DcaTrader(make_cfg(symbols=["AAPL"], dca_take_profit_pct=2.0), ex, source="alpaca")
         m = BotManager()
-        m.units = [Unit("alpaca", trader, threading.Thread(target=lambda: None), threading.Event())]
-        r = m.backtest("alpaca", "AAPL", "1d", 80)
+        m.trader = DcaTrader(make_cfg(symbols=["BTCUSDT"], dca_take_profit_pct=2.0), ex)
+        r = m.backtest("BTCUSDT", "1d", 80)
         self.assertNotIn("error", r)
-        self.assertEqual(r["symbol"], "AAPL")
+        self.assertEqual(r["symbol"], "BTCUSDT")
         self.assertEqual(r["bars"], len(prices))
         self.assertIn("pnl_pct", r)
 
-    def test_backtest_no_broker(self):
+    def test_backtest_not_running(self):
         from manager import BotManager
-        self.assertIn("error", BotManager().backtest("alpaca", "AAPL", "1d", 80))
-
-
-# ─────────────────────────── распределение по волатильности ───────────────────────────
-class TestPortfolio(unittest.TestCase):
-    def test_crypto_capped(self):
-        from portfolio import inverse_vol_weights
-        w = inverse_vol_weights({"binance": 60.0, "alpaca": 18.0}, crypto_max=0.15)
-        self.assertAlmostEqual(w["binance"], 0.15, places=4)        # крипта прижата к потолку
-        self.assertAlmostEqual(w["alpaca"], 0.85, places=4)        # остаток акциям
-        self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
-
-    def test_inverse_vol_without_cap_breach(self):
-        # если по обратной вол. крипта и так ниже потолка — не трогаем
-        from portfolio import inverse_vol_weights
-        w = inverse_vol_weights({"binance": 100.0, "alpaca": 20.0}, crypto_max=0.30)
-        self.assertLess(w["binance"], w["alpaca"])                  # волатильному меньше
-        self.assertAlmostEqual(sum(w.values()), 1.0, places=6)
-
-    def test_single_broker_gets_all(self):
-        from portfolio import split_budget
-        self.assertEqual(split_budget(1000.0, {"alpaca": 18.0}), {"alpaca": 1000.0})
-
-    def test_split_budget_crypto_small(self):
-        from portfolio import split_budget
-        s = split_budget(1000.0, {"binance": 60.0, "alpaca": 18.0}, crypto_max=0.15)
-        self.assertAlmostEqual(s["binance"], 150.0, places=2)
-        self.assertAlmostEqual(s["alpaca"], 850.0, places=2)
-
-    def test_allocation_endpoint_no_units(self):
-        import dashboard
-        r = dashboard.app.test_client().get("/api/allocation").get_json()
-        self.assertFalse(r["enabled"])
-
-    def test_auto_allocation_scales_and_validates(self):
-        from main import apply_auto_allocation
-        # равные бюджеты крипта/акции → крипта прижимается к 15%
-        cfg = dataclasses.replace(
-            make_cfg(symbols=["BTCUSDT"]), allocation_auto=True,
-            binance_enabled=True, alpaca_enabled=True,
-            trade_quote_amount=500.0, alpaca_trade_quote_amount=500.0,
-            alpaca_symbols=["SPY"], alpaca_api_key="k", alpaca_api_secret="s")
-        out = apply_auto_allocation(cfg)
-        self.assertAlmostEqual(out.trade_quote_amount, 150.0, places=1)   # 15% от 1000
-        self.assertAlmostEqual(out.alpaca_trade_quote_amount, 850.0, places=1)
-        # размеры ордеров масштабированы тем же множителем (kb=0.3)
-        self.assertAlmostEqual(out.dca_base_order, cfg.dca_base_order * 0.3, places=4)
-        # валидация бюджета не падает после масштабирования
-        out.validate()
-        out.for_alpaca().validate()
-
-    def test_auto_allocation_off_unchanged(self):
-        from main import apply_auto_allocation
-        cfg = make_cfg(symbols=["BTCUSDT"])  # allocation_auto=False
-        self.assertIs(apply_auto_allocation(cfg), cfg)
-
-    def test_auto_allocation_single_broker_noop(self):
-        from main import apply_auto_allocation
-        cfg = dataclasses.replace(make_cfg(symbols=["BTCUSDT"]),
-                                  allocation_auto=True, alpaca_enabled=False)
-        self.assertIs(apply_auto_allocation(cfg), cfg)
+        self.assertIn("error", BotManager().backtest("BTCUSDT", "1d", 80))
 
 
 # ─────────────────────────── manager (без сети) ───────────────────────────
@@ -805,146 +744,13 @@ class TestManager(unittest.TestCase):
         from manager import BotManager
         info = BotManager().info()
         self.assertFalse(info["running"])
-        self.assertEqual(info["units"], [])
-
-    def test_switch_mode_invalid(self):
-        from manager import BotManager
-        r = BotManager().switch_mode("nonsense", "live")
-        self.assertFalse(r["ok"])
+        self.assertEqual(info["mode"], "—")
+        self.assertEqual(info["symbols"], [])
 
     def test_switch_mode_bad_target(self):
         from manager import BotManager
-        self.assertFalse(BotManager().switch_mode("binance", "paper")["ok"])
-        self.assertFalse(BotManager().switch_mode("alpaca", "test")["ok"])
-
-
-# ─────────────────────────── Alpaca broker (фейк-клиенты) ───────────────────────────
-class _NS(types.SimpleNamespace):
-    pass
-
-
-class FakeAlpacaTrading:
-    def __init__(self):
-        self.submitted = []
-        self.cash = 100000.0
-    def get_account(self): return _NS(cash=str(self.cash), trading_blocked=False)
-    def get_clock(self): return _NS(is_open=True)
-    def get_open_position(self, asset):
-        if asset == "AAPL":
-            return _NS(qty="5", qty_available="5")
-        raise RuntimeError("no position")
-    def get_all_positions(self): return [_NS(symbol="AAPL", qty="5")]
-    def get_orders(self, req):
-        return [_NS(symbol="AAPL", side=_NS(value="buy"), order_type=_NS(value="market"),
-                    limit_price=None, filled_avg_price="150", qty="1", notional=None)]
-    def submit_order(self, req):
-        self.submitted.append(req)
-        return _NS(id="ord-1")
-    def get_order_by_id(self, oid):
-        return _NS(id=oid, filled_qty="2", filled_avg_price="150", status="filled")
-
-
-class FakeAlpacaData:
-    def get_stock_latest_trade(self, req):
-        sym = req.symbol_or_symbols
-        return {sym: _NS(price=150.0)}
-    def get_stock_bars(self, req):
-        sym = req.symbol_or_symbols
-        return _NS(data={sym: [_NS(close=100.0), _NS(close=101.0), _NS(close=102.0)]})
-
-
-class TestAlpacaBroker(unittest.TestCase):
-    def _mk(self):
-        from alpaca_broker import AlpacaBroker
-        return AlpacaBroker("k", "s", paper=True,
-                            trading_client=FakeAlpacaTrading(), data_client=FakeAlpacaData())
-
-    def test_price_and_closes(self):
-        b = self._mk()
-        self.assertEqual(b.get_price("AAPL"), 150.0)
-        self.assertEqual(b.get_closes("AAPL", "1h", 3), [100.0, 101.0, 102.0])
-
-    def test_market_open_and_quote_asset(self):
-        b = self._mk()
-        self.assertTrue(b.market_open())
-        self.assertEqual(b.quote_asset("AAPL"), "USD")
-        self.assertEqual(b.base_asset("AAPL"), "AAPL")
-
-    def test_balances_and_free(self):
-        b = self._mk()
-        self.assertEqual(b.balances()["USD"], 100000.0)
-        self.assertEqual(b.get_free_balance("USD"), 100000.0)
-        self.assertEqual(b.get_free_balance("AAPL"), 5.0)
-        self.assertEqual(b.get_free_balance("TSLA"), 0.0)
-
-    def test_open_orders_normalized(self):
-        o = self._mk().open_orders()[0]
-        self.assertEqual(o["symbol"], "AAPL")
-        self.assertEqual(o["side"], "BUY")
-        self.assertEqual(o["type"], "market")
-
-    def test_buy_and_sell(self):
-        b = self._mk()
-        r = b.market_buy_quote("AAPL", 300)
-        self.assertEqual(r["qty"], 2.0)
-        self.assertAlmostEqual(r["cummulativeQuoteQty"], 300.0)
-        self.assertEqual(b.market_sell_qty("AAPL", 2)["qty"], 2.0)
-
-    def test_deposit_and_verify(self):
-        b = self._mk()
-        self.assertEqual(b.deposit_address("USD")["address"], "")
-        self.assertTrue(b.verify_credentials()["can_trade"])
-
-
-class TestBrokerWiring(unittest.TestCase):
-    def test_for_alpaca_derives(self):
-        cfg = make_cfg(symbols=["BTCUSDT"])
-        cfg = dataclasses.replace(cfg, alpaca_symbols=["AAPL", "MSFT"],
-                                  alpaca_paper=True, alpaca_trade_quote_amount=5000.0,
-                                  alpaca_api_key="ak", alpaca_api_secret="as_")
-        a = cfg.for_alpaca()
-        self.assertEqual(a.symbols, ["AAPL", "MSFT"])
-        self.assertEqual(a.fee_pct, 0.0)
-        self.assertFalse(a.withdraw_enabled)
-        self.assertEqual(a.api_key, "ak")
-        self.assertTrue(a.testnet)  # paper → testnet-семантика
-
-    def test_for_alpaca_dca_override_and_defaults(self):
-        from config import STOCK_DCA_DEFAULTS
-        cfg = dataclasses.replace(
-            make_cfg(symbols=["BTCUSDT"]), alpaca_symbols=["AAPL"],
-            alpaca_api_key="k", alpaca_api_secret="s", alpaca_trade_quote_amount=5000.0,
-            alpaca_dca_take_profit_pct=8.0)  # TP переопределён, остальное — дефолты акций
-        a = cfg.for_alpaca()
-        self.assertEqual(a.dca_take_profit_pct, 8.0)
-        self.assertEqual(a.dca_base_order, STOCK_DCA_DEFAULTS["base_order"])
-        self.assertEqual(a.dca_take_profit_pct != cfg.dca_take_profit_pct, True)
-
-    def test_for_alpaca_budget_validation(self):
-        cfg = dataclasses.replace(
-            make_cfg(symbols=["BTCUSDT"]), alpaca_symbols=["AAPL"],
-            alpaca_api_key="k", alpaca_api_secret="s", alpaca_trade_quote_amount=50.0,
-            alpaca_dca_base_order=100.0, alpaca_dca_safety_order=100.0,
-            alpaca_dca_max_safety_orders=5)  # 100+100*5=600 > бюджет 50
-        with self.assertRaises(ValueError):
-            cfg.for_alpaca()
-
-    def test_create_traders_attempts_binance_only(self):
-        from main import create_traders
-        cfg = make_cfg(symbols=["BTCUSDT"])  # binance on, alpaca off
-        units, errors = create_traders(cfg, logging.getLogger("t"))
-        names = [n for n, _ in units] + list(errors)  # успех ИЛИ ошибка — но попытка была
-        self.assertIn("binance", names)
-        self.assertNotIn("alpaca", names)
-
-    def test_create_traders_alpaca_missing_keys(self):
-        from main import create_traders
-        cfg = dataclasses.replace(make_cfg(symbols=["BTCUSDT"]),
-                                  binance_enabled=False, alpaca_enabled=True,
-                                  alpaca_api_key="", alpaca_api_secret="")
-        units, errors = create_traders(cfg, logging.getLogger("t"))
-        self.assertEqual(units, [])
-        self.assertIn("alpaca", errors)
+        self.assertFalse(BotManager().switch_mode("paper")["ok"])
+        self.assertFalse(BotManager().switch_mode("nonsense")["ok"])
 
 
 # ─────────────────────────── swing (смоук) ───────────────────────────

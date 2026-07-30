@@ -90,15 +90,13 @@ PAGE = """
 </header>
 <div class="layout">
   <aside class="sidebar">
-    <h3>Брокеры и режим</h3>
+    <h3>Режим</h3>
     <div id="brokers"><div class="muted">—</div></div>
-    <h3>Итоги по брокерам</h3>
+    <h3>Итоги</h3>
     <div id="overview"><div class="muted">—</div></div>
-    <h3>Распределение бюджета</h3>
-    <div id="allocation"><div class="muted">—</div></div>
     <h3>Действия</h3>
     <button class="btn" id="btnSettings">⚙ Настройки</button>
-    <button class="btn" id="btnBacktest">📊 Бэктест акций</button>
+    <button class="btn" id="btnBacktest">📊 Бэктест</button>
     <button class="btn" id="btnDeposit">⬇ Пополнить счёт</button>
     <button class="btn danger" id="btnFlatten">✕ Закрыть все позиции</button>
     <h3>Позиции</h3>
@@ -106,7 +104,6 @@ PAGE = """
   </aside>
   <main class="content">
     <div id="hint" style="display:none; margin:16px 24px 0; padding:12px 16px; background:#3a2a00; border:1px solid #6b4f00; border-radius:8px; color:#e3b341;"></div>
-    <div id="dataTabs" style="padding:8px 24px 0; display:flex; gap:8px;"></div>
     <div class="cards" id="cards"></div>
     <div id="regime" style="padding:0 24px 8px;"></div>
     <div class="grid">
@@ -132,14 +129,14 @@ PAGE = """
 
 <div class="overlay" id="backtestOverlay">
   <div class="modal">
-    <h2>📊 Бэктест акций (Alpaca)</h2>
-    <div class="muted" style="margin-bottom:10px">Прогон текущих DCA-параметров брокера по историческим барам. Помогает подобрать шаг/тейк-профит до запуска.</div>
+    <h2>📊 Бэктест стратегии</h2>
+    <div class="muted" style="margin-bottom:10px">Прогон текущих DCA-параметров по историческим свечам. Помогает подобрать шаг/тейк-профит до запуска.</div>
     <div class="row2">
-      <div class="field"><label>Тикер</label><input id="btSymbol" value="AAPL"></div>
+      <div class="field"><label>Монета</label><input id="btSymbol" value="BTCUSDT"></div>
       <div class="field"><label>Таймфрейм</label>
-        <select id="btInterval"><option>1d</option><option>1h</option><option>15m</option></select></div>
+        <select id="btInterval"><option>1d</option><option>4h</option><option>1h</option><option>15m</option></select></div>
     </div>
-    <div class="field"><label>Сколько баров (история)</label><input id="btLimit" value="365"></div>
+    <div class="field"><label>Сколько свечей (история)</label><input id="btLimit" value="500"></div>
     <button class="btn primary" id="btRun" style="width:auto">Запустить</button>
     <div id="btResult" style="margin-top:14px"></div>
     <button class="btn" id="btClose" style="width:auto; margin-top:12px">Закрыть</button>
@@ -162,27 +159,12 @@ PAGE = """
 <script>
 const PRIMARY = "{{ symbol }}";
 let equityChart, priceChart;
-let dataSource = 'binance';  // какой брокер показываем на графиках/карточках
-let unitsCache = [];
 
-function renderTabs(){
-  const names = unitsCache.map(u=>u.name);
-  if(!names.includes(dataSource) && names.length) dataSource = names[0];
-  const LBL = {binance:'Binance · крипта', alpaca:'Alpaca · акции'};
-  document.getElementById('dataTabs').innerHTML = names.map(n=>
-    `<button class="btn" style="width:auto;margin:0;${n===dataSource?'background:#1f6feb;border-color:#1f6feb':''}"
-      onclick="selectSource('${n}')">${LBL[n]||n}</button>`).join('');
-}
-function selectSource(n){ dataSource = n; resetCharts(); renderTabs(); load(); }
-function resetCharts(){
-  if(equityChart){ equityChart.destroy(); equityChart=null; }
-  if(priceChart){ priceChart.destroy(); priceChart=null; }
-}
 function money(x){ return (x>=0?'':'-') + '$' + Math.abs(x).toFixed(2); }
 function cls(x){ return x>=0?'pos':'neg'; }
 
 async function load(){
-  const d = await (await fetch('/api/data?source=' + dataSource)).json();
+  const d = await (await fetch('/api/data')).json();
   // подсказка, если данных ещё нет
   const hint = document.getElementById('hint');
   if(d.equity.length === 0){
@@ -259,80 +241,57 @@ async function load(){
 }
 
 // ── Панель управления ──────────────────────────────────────────────
-const MODE_LABEL = {dry:'DRY-RUN', test:'TESTNET', paper:'PAPER', live:'РЕАЛЬНЫЙ'};
-const MODE_CLASS = {dry:'dry', test:'test', paper:'test', live:'live'};
-const BROKER_NAME = {binance:'Binance · крипта', alpaca:'Alpaca · акции'};
+const MODE_LABEL = {dry:'DRY-RUN', test:'TESTNET', live:'РЕАЛЬНЫЙ', '—':'—'};
+const MODE_CLASS = {dry:'dry', test:'test', live:'live'};
 
 async function loadControl(){
   const info = await (await fetch('/api/control')).json();
-  const units = info.units||[];
-  let html = units.map(u=>`
+  let html = `
     <div class="pos-item">
-      <b>${BROKER_NAME[u.name]||u.name}</b>
-      <span class="modeBadge m-${MODE_CLASS[u.mode]||'dry'}" style="float:right">${MODE_LABEL[u.mode]||u.mode}${u.running?'':' · стоп'}</span>
-      <div class="muted" style="margin-top:6px">${(u.symbols||[]).join(', ')}</div>
-      <button class="btn" style="margin-top:8px" onclick="switchMode('${u.name}','${u.mode}')">Переключить режим</button>
-    </div>`).join('');
-  const errs = info.errors||{};
-  Object.keys(errs).forEach(k=> html += `<div class="pos-item" style="border-color:#7a2a2a"><b>${BROKER_NAME[k]||k}</b> ⚠<br><span class="muted">${errs[k]}</span></div>`);
-  document.getElementById('brokers').innerHTML = html || '<div class="muted">нет активных брокеров</div>';
-  unitsCache = units;
-  renderTabs();
+      <b>Binance · крипта</b>
+      <span class="modeBadge m-${MODE_CLASS[info.mode]||'dry'}" style="float:right">${MODE_LABEL[info.mode]||info.mode}${info.running?'':' · стоп'}</span>
+      <div class="muted" style="margin-top:6px">${(info.symbols||[]).join(', ')||'—'} · бюджет $${(+info.budget||0).toFixed(0)}</div>
+      <button class="btn" style="margin-top:8px" onclick="switchMode('${info.mode}')">Переключить режим</button>
+    </div>`;
+  if(info.error) html += `<div class="pos-item" style="border-color:#7a2a2a">⚠<br><span class="muted">${info.error}</span></div>`;
+  document.getElementById('brokers').innerHTML = html;
 
   const ov = await (await fetch('/api/overview')).json();
-  document.getElementById('overview').innerHTML = (ov||[]).length ? ov.map(o=>{
+  const o = (ov||[])[0];
+  document.getElementById('overview').innerHTML = o ? (()=>{
     const d=+o.day_pnl, u=+o.unrealized;
-    return `<div class="pos-item"><b>${BROKER_NAME[o.source]||o.source}</b>
+    return `<div class="pos-item">
       <div class="muted" style="margin:4px 0">капитал ${money(o.equity)} · нереал. <span class="${u>=0?'pos':'neg'}">${u>=0?'+':''}${u.toFixed(2)}$</span></div>
       сегодня <span class="${d>=0?'pos':'neg'}">${d>=0?'+':''}${d.toFixed(2)}$</span></div>`;
-  }).join('') : '<div class="muted">нет данных</div>';
-
-  const al = await (await fetch('/api/allocation')).json();
-  const ael = document.getElementById('allocation');
-  if(!al.enabled){ ael.innerHTML = '<div class="muted">нет активных брокеров</div>'; }
-  else {
-    const pct = v => al.total ? (100*v/al.total).toFixed(0) : 0;
-    let drift = false;
-    let rows = Object.keys(al.current).map(n=>{
-      const cur = al.current[n], rec = al.recommended[n]||0;
-      if(Math.abs(cur-rec) > 0.05*al.total) drift = true;
-      return `<div style="font-size:12px;margin:3px 0">${BROKER_NAME[n]||n}:
-        <b>$${cur.toFixed(0)}</b> (${pct(cur)}%) → реком. <b>$${rec.toFixed(0)}</b> (${pct(rec)}%)</div>`;
-    }).join('');
-    rows += `<div class="muted" style="margin-top:6px">По обратной волатильности, крипта ≤ ${(al.crypto_max_weight*100).toFixed(0)}%.`
-      + (drift ? ' ⚠ Текущее распределение далеко от рекомендуемого — поправь бюджеты в Настройках.' : ' ✓ Близко к рекомендуемому.')
-      + '</div>';
-    ael.innerHTML = rows;
-  }
+  })() : '<div class="muted">нет данных</div>';
 
   const p = await (await fetch('/api/positions')).json();
   document.getElementById('positions').innerHTML = (p.positions||[]).map(x=>{
-    const tag = `<span class="muted">[${x.broker||''}]</span> `;
-    if(!x.in_position) return `<div class="pos-item">${tag}<b>${x.symbol}</b> · вне позиции<br><span class="muted">цена ${(+x.price).toFixed(2)}</span></div>`;
+    if(!x.in_position) return `<div class="pos-item"><b>${x.symbol}</b> · вне позиции<br><span class="muted">цена ${(+x.price).toFixed(2)}</span></div>`;
     const u = +x.unrealized;
-    return `<div class="pos-item">${tag}<b>${x.symbol}</b> · ${(+x.qty).toFixed(6)}<br>
+    return `<div class="pos-item"><b>${x.symbol}</b> · ${(+x.qty).toFixed(6)}<br>
       вход ${(+x.avg_entry).toFixed(2)} · цена ${(+x.price).toFixed(2)}<br>
       <span class="${u>=0?'pos':'neg'}">${u>=0?'+':''}${u.toFixed(2)}$</span> · TP ${(+x.tp_price).toFixed(2)} · докупок ${x.safety_filled}</div>`;
   }).join('') || '<div class="muted">нет данных</div>';
 
   const orders = p.orders||[];
   document.getElementById('orders').innerHTML = orders.length
-    ? `<table><thead><tr><th>Брокер</th><th>Пара</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th></tr></thead><tbody>`
-      + orders.map(o=>`<tr><td>${o.broker||''}</td><td>${o.symbol}</td><td>${o.side}</td><td>${o.type}</td><td>${o.price}</td><td>${o.origQty}</td></tr>`).join('')
+    ? `<table><thead><tr><th>Пара</th><th>Сторона</th><th>Тип</th><th>Цена</th><th>Кол-во</th></tr></thead><tbody>`
+      + orders.map(o=>`<tr><td>${o.symbol}</td><td>${o.side}</td><td>${o.type}</td><td>${o.price}</td><td>${o.origQty}</td></tr>`).join('')
       + `</tbody></table>`
-    : '<div class="muted">нет открытых ордеров (или тест/paper-режим)</div>';
+    : '<div class="muted">нет открытых ордеров (или тестовый режим)</div>';
 }
 
-// Переключение режима конкретного брокера
-async function switchMode(broker, curMode){
+// Переключение режима: testnet ↔ реальные деньги
+async function switchMode(curMode){
   const toLive = curMode!=='live';
-  const target = toLive ? 'live' : (broker==='alpaca' ? 'paper' : 'test');
+  const target = toLive ? 'live' : 'test';
   const msg = toLive
-    ? `[${broker}] Перейти в РЕАЛЬНЫЙ режим? Ордера пойдут настоящими деньгами!`
-    : `[${broker}] Вернуться в ${broker==='alpaca'?'PAPER':'TESTNET'}? Открытые боевые позиции будут ЗАКРЫТЫ (проданы в рынок).`;
+    ? 'Перейти в РЕАЛЬНЫЙ режим? Ордера пойдут НАСТОЯЩИМИ деньгами!'
+    : 'Вернуться в TESTNET? Открытые боевые позиции будут ЗАКРЫТЫ (проданы в рынок).';
   if(!confirm(msg)) return;
   const r = await (await fetch('/api/mode', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({broker, target})})).json();
+    body: JSON.stringify({target})})).json();
   alert(r.ok ? ('Готово'+(r.closed?` · закрыто позиций: ${r.closed}`:'')+(r.error?(' ⚠ '+r.error):'')) : ('Ошибка: '+r.error));
   loadControl();
 }
@@ -355,19 +314,10 @@ document.getElementById('btnSettings').onclick = async ()=>{
     DCA_STOP_LOSS_PCT:'DCA стоп-лосс % (0=выкл)', DCA_ATR_ENABLED:'ATR-привязка шага (true/false)',
     DCA_TREND_FILTER_ENABLED:'Трендовый фильтр 200-MA (true/false)',
     ADAPTIVE_ENABLED:'Адаптивный режим', POLL_INTERVAL_SECONDS:'Опрос, сек',
-    ALLOCATION_AUTO:'Авто-распределение бюджета (true/false)', CRYPTO_MAX_WEIGHT:'Потолок доли крипты (0.15=15%)',
     WITHDRAW_ENABLED:'Автовывод вкл', WITHDRAW_PROFIT_PCT:'Вывод % прибыли', WITHDRAW_MIN_AMOUNT:'Вывод от, USDT',
     WITHDRAW_ASSET:'Вывод: монета', WITHDRAW_NETWORK:'Вывод: сеть', WITHDRAW_ADDRESS:'Вывод: адрес',
-    BINANCE_ENABLED:'Binance вкл (true/false)',
     BINANCE_API_KEY:'Binance боевой API Key', BINANCE_API_SECRET:'Binance боевой API Secret',
-    BINANCE_TESTNET_API_KEY:'Binance Testnet Key', BINANCE_TESTNET_API_SECRET:'Binance Testnet Secret',
-    ALPACA_ENABLED:'Alpaca/акции вкл (true/false)', ALPACA_PAPER:'Alpaca paper (true/false)',
-    ALPACA_SYMBOLS:'Тикеры акций через запятую (AAPL,MSFT)', ALPACA_TRADE_QUOTE_AMOUNT:'Бюджет акций, USD',
-    ALPACA_DCA_BASE_ORDER:'Акции: базовый ордер (пусто=$50)',
-    ALPACA_DCA_SAFETY_ORDER:'Акции: размер докупки (пусто=$50)', ALPACA_DCA_MAX_SAFETY_ORDERS:'Акции: макс. докупок (пусто=4)',
-    ALPACA_DCA_PRICE_DEVIATION_PCT:'Акции: шаг просадки % (пусто=1.5)', ALPACA_DCA_TAKE_PROFIT_PCT:'Акции: тейк-профит % (пусто=2)',
-    ALPACA_DCA_STOP_LOSS_PCT:'Акции: стоп-лосс % (пусто=12)',
-    APCA_API_KEY_ID:'Alpaca API Key ID', APCA_API_SECRET_KEY:'Alpaca API Secret'};
+    BINANCE_TESTNET_API_KEY:'Binance Testnet Key', BINANCE_TESTNET_API_SECRET:'Binance Testnet Secret'};
   document.getElementById('settingsForm').innerHTML = Object.keys(s).map(k=>
     `<div class="field"><label>${labels[k]||k}</label><input data-k="${k}" value="${s[k]||''}"></div>`).join('');
   sOverlay.classList.add('show');
@@ -382,11 +332,11 @@ document.getElementById('settingsSave').onclick = async ()=>{
   sOverlay.classList.remove('show'); loadControl();
 };
 
-// Бэктест акций
+// Бэктест стратегии
 const btOverlay = document.getElementById('backtestOverlay');
-document.getElementById('btnBacktest').onclick = ()=>{
-  const alp = unitsCache.find(u=>u.name==='alpaca');
-  if(alp && alp.symbols && alp.symbols.length) document.getElementById('btSymbol').value = alp.symbols[0];
+document.getElementById('btnBacktest').onclick = async ()=>{
+  const info = await (await fetch('/api/control')).json();
+  if(info.symbols && info.symbols.length) document.getElementById('btSymbol').value = info.symbols[0];
   document.getElementById('btResult').innerHTML = '';
   btOverlay.classList.add('show');
 };
@@ -397,11 +347,11 @@ document.getElementById('btRun').onclick = async ()=>{
   const lim = document.getElementById('btLimit').value;
   const res = document.getElementById('btResult');
   res.innerHTML = '<div class="muted">считаю…</div>';
-  const r = await (await fetch(`/api/backtest?source=alpaca&symbol=${sym}&interval=${itv}&limit=${lim}`)).json();
+  const r = await (await fetch(`/api/backtest?symbol=${sym}&interval=${itv}&limit=${lim}`)).json();
   if(r.error){ res.innerHTML = `<div class="muted">⚠ ${r.error}</div>`; return; }
   const pc = r.pnl_pct>=0?'pos':'neg';
   res.innerHTML = `<div class="pos-item">
-    <b>${r.symbol}</b> · ${r.interval} · ${r.bars} баров<br>
+    <b>${r.symbol}</b> · ${r.interval} · ${r.bars} свечей<br>
     старт $${(+r.start_cash).toFixed(0)} → итог $${(+r.final).toFixed(2)}<br>
     доходность: <span class="${pc}">${r.pnl_pct>=0?'+':''}${(+r.pnl_pct).toFixed(2)}%</span><br>
     циклов: ${r.cycles} · прибыльных: ${r.wins} · макс. просадка: ${(+r.max_drawdown_pct).toFixed(1)}%</div>`;
@@ -464,54 +414,36 @@ def _day_pnl(equity_rows: list) -> float:
 
 @app.route("/api/overview")
 def overview():
-    """Сводка по каждому брокеру: капитал, реализованная/нереализованная, P&L за день."""
-    eq = journal.read_csv(journal.EQUITY_CSV)
-    sources = sorted({(r.get("source") or "binance") for r in eq})
-    out = []
-    for s in sources:
-        rows = [r for r in eq if (r.get("source") or "binance") == s]
-        if not rows:
-            continue
-        last = rows[-1]
-        out.append({
-            "source": s,
-            "equity": _f(last.get("equity")),
-            "realized": _f(last.get("realized_pnl")),
-            "unrealized": _f(last.get("unrealized_pnl")),
-            "day_pnl": _day_pnl(rows),
-        })
-    return jsonify(out)
-
-
-@app.route("/api/allocation")
-def allocation():
-    return jsonify(manager.allocation())
+    """Сводка: капитал, реализованная/нереализованная прибыль, P&L за день."""
+    rows = journal.read_csv(journal.EQUITY_CSV)
+    if not rows:
+        return jsonify([])
+    last = rows[-1]
+    return jsonify([{
+        "equity": _f(last.get("equity")),
+        "realized": _f(last.get("realized_pnl")),
+        "unrealized": _f(last.get("unrealized_pnl")),
+        "day_pnl": _day_pnl(rows),
+    }])
 
 
 @app.route("/api/backtest")
 def backtest():
-    source = request.args.get("source", "alpaca")
     symbol = request.args.get("symbol", "").upper()
     interval = request.args.get("interval", "1d")
     try:
-        limit = max(2, min(int(request.args.get("limit", 365)), 1000))
+        limit = max(2, min(int(request.args.get("limit", 500)), 1000))
     except ValueError:
-        limit = 365
+        limit = 500
     if not symbol:
-        return jsonify({"error": "не задан символ"})
-    return jsonify(manager.backtest(source, symbol, interval, limit))
+        return jsonify({"error": "не задана монета"})
+    return jsonify(manager.backtest(symbol, interval, limit))
 
 
 @app.route("/api/data")
 def data():
-    # Данные разнесены по брокерам колонкой source (старые строки без неё = binance).
-    source = request.args.get("source", "binance")
-
-    def _match(r):
-        return (r.get("source") or "binance") == source
-
-    equity = [r for r in journal.read_csv(journal.EQUITY_CSV) if _match(r)]
-    trades = [r for r in journal.read_csv(journal.TRADES_CSV) if _match(r)]
+    equity = journal.read_csv(journal.EQUITY_CSV)
+    trades = journal.read_csv(journal.TRADES_CSV)
     last = equity[-1] if equity else {}
     wins = sum(1 for t in trades if t.get("side") == "SELL" and _f(t.get("realized_pnl")) > 0)
     sells = sum(1 for t in trades if t.get("side") == "SELL")
@@ -526,7 +458,7 @@ def data():
         "day_pnl": _day_pnl(equity),
     }
     status = {}
-    status_file = journal.DIR / ("status.json" if source == "binance" else f"status_{source}.json")
+    status_file = journal.DIR / "status.json"
     if status_file.exists():
         try:
             status = json.loads(status_file.read_text())

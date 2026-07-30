@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
@@ -23,32 +23,6 @@ def _get_float(name: str, default: float) -> float:
     return float(val) if val not in (None, "") else default
 
 
-def _get_float_opt(name: str) -> float | None:
-    """Float или None, если переменная не задана (для «наследовать значение»)."""
-    val = os.getenv(name)
-    return float(val) if val not in (None, "") else None
-
-
-def _get_int_opt(name: str) -> int | None:
-    val = os.getenv(name)
-    return int(val) if val not in (None, "") else None
-
-
-# Разумные дефолты DCA под крупные акции. Они МЕНЕЕ волатильны, чем крипта
-# (1–2% в день против 3–8%), поэтому шаг просадки и тейк-профит теснее. Плюс
-# страховочный стоп-лосс на цикл — отдельные акции бывают необратимо падают,
-# поэтому ограничиваем убыток (для крипты по умолчанию выключен). Перекрываются
-# ALPACA_DCA_*.
-STOCK_DCA_DEFAULTS = {
-    "base_order": 25.0,
-    "safety_order": 25.0,
-    "max_safety_orders": 4,
-    "price_deviation_pct": 1.5,
-    "take_profit_pct": 2.0,
-    "stop_loss_pct": 12.0,
-}
-
-
 def _get_int(name: str, default: int) -> int:
     val = os.getenv(name)
     return int(val) if val not in (None, "") else default
@@ -66,13 +40,6 @@ def _resolve_keys(testnet: bool) -> tuple[str, str]:
         sec = os.getenv("BINANCE_TESTNET_API_SECRET") or os.getenv("BINANCE_API_SECRET", "")
         return key, sec
     return os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", "")
-
-
-def _split_csv(raw: str) -> list[str]:
-    """Список символов через запятую, в верхнем регистре, без дублей."""
-    syms = [s.strip().upper() for s in (raw or "").split(",") if s.strip()]
-    seen: set[str] = set()
-    return [s for s in syms if not (s in seen or seen.add(s))]
 
 
 def _get_symbols() -> list[str]:
@@ -152,13 +119,6 @@ class Config:
     dca_trend_ma_period: int = 200
     dca_trend_interval: str = "1d"
 
-    # Потолок доли крипты в портфеле (ядро-спутник): крипта волатильна, поэтому
-    # ограничиваем её вес. Используется для рекомендации распределения бюджета.
-    crypto_max_weight: float = 0.15
-    # Авто-применение распределения: бот сам выставит бюджеты брокеров по обратной
-    # волатильности (и пропорционально масштабирует размеры ордеров).
-    allocation_auto: bool = False
-
     # ATR-привязка шага/тейк-профита: вместо фиксированных % шаг и цель считаются
     # от недавней волатильности (среднее абсолютное изменение закрытий, %).
     # Работает, только когда адаптивный режим ВЫКЛ. Перекрывает price_deviation/TP.
@@ -168,22 +128,6 @@ class Config:
     dca_atr_tp_mult: float = 1.5
     dca_atr_min_pct: float = 0.5
     dca_atr_max_pct: float = 8.0
-
-    # Брокеры. Binance — крипта, Alpaca — акции (можно оба сразу).
-    binance_enabled: bool = True
-    alpaca_enabled: bool = False
-    alpaca_paper: bool = True
-    alpaca_api_key: str = ""
-    alpaca_api_secret: str = ""
-    alpaca_symbols: list[str] = field(default_factory=list)
-    alpaca_trade_quote_amount: float = 1000.0
-    # Отдельные DCA-параметры под акции (None = наследовать крипто-значение).
-    alpaca_dca_base_order: float | None = None
-    alpaca_dca_safety_order: float | None = None
-    alpaca_dca_max_safety_orders: int | None = None
-    alpaca_dca_price_deviation_pct: float | None = None
-    alpaca_dca_take_profit_pct: float | None = None
-    alpaca_dca_stop_loss_pct: float | None = None
 
     @classmethod
     def load(cls, strict: bool = True) -> "Config":
@@ -229,19 +173,6 @@ class Config:
             regime_slope_pct=_get_float("REGIME_SLOPE_PCT", 0.6),
             regime_high_vol_pct=_get_float("REGIME_HIGH_VOL_PCT", 2.5),
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
-            binance_enabled=_get_bool("BINANCE_ENABLED", True),
-            alpaca_enabled=_get_bool("ALPACA_ENABLED", False),
-            alpaca_paper=_get_bool("ALPACA_PAPER", True),
-            alpaca_api_key=os.getenv("APCA_API_KEY_ID", "").strip(),
-            alpaca_api_secret=os.getenv("APCA_API_SECRET_KEY", "").strip(),
-            alpaca_symbols=_split_csv(os.getenv("ALPACA_SYMBOLS", "")),
-            alpaca_trade_quote_amount=_get_float("ALPACA_TRADE_QUOTE_AMOUNT", 1000.0),
-            alpaca_dca_base_order=_get_float_opt("ALPACA_DCA_BASE_ORDER"),
-            alpaca_dca_safety_order=_get_float_opt("ALPACA_DCA_SAFETY_ORDER"),
-            alpaca_dca_max_safety_orders=_get_int_opt("ALPACA_DCA_MAX_SAFETY_ORDERS"),
-            alpaca_dca_price_deviation_pct=_get_float_opt("ALPACA_DCA_PRICE_DEVIATION_PCT"),
-            alpaca_dca_take_profit_pct=_get_float_opt("ALPACA_DCA_TAKE_PROFIT_PCT"),
-            alpaca_dca_stop_loss_pct=_get_float_opt("ALPACA_DCA_STOP_LOSS_PCT"),
             dca_stop_loss_pct=_get_float("DCA_STOP_LOSS_PCT", 0.0),
             dca_atr_enabled=_get_bool("DCA_ATR_ENABLED", False),
             dca_atr_period=_get_int("DCA_ATR_PERIOD", 14),
@@ -252,39 +183,10 @@ class Config:
             dca_trend_filter_enabled=_get_bool("DCA_TREND_FILTER_ENABLED", False),
             dca_trend_ma_period=_get_int("DCA_TREND_MA_PERIOD", 200),
             dca_trend_interval=os.getenv("DCA_TREND_INTERVAL", "1d"),
-            crypto_max_weight=_get_float("CRYPTO_MAX_WEIGHT", 0.15),
-            allocation_auto=_get_bool("ALLOCATION_AUTO", False),
         )
         if strict:
             cfg.validate()
         return cfg
-
-    def for_alpaca(self) -> "Config":
-        """Производный конфиг для DCA-трейдера на Alpaca: акции, свои символы,
-        бюджет и DCA-параметры. Пусто (ALPACA_DCA_* не задано) → разумные дефолты
-        под акции (STOCK_DCA_DEFAULTS), а не крипто-значения. paper → testnet."""
-        d = STOCK_DCA_DEFAULTS
-        def pick(opt, default):
-            return default if opt is None else opt
-        derived = replace(
-            self,
-            symbols=self.alpaca_symbols or ["SPY", "QQQ"],
-            trade_quote_amount=self.alpaca_trade_quote_amount,
-            fee_pct=0.0,
-            dry_run=False,
-            testnet=self.alpaca_paper,
-            api_key=self.alpaca_api_key,
-            api_secret=self.alpaca_api_secret,
-            withdraw_enabled=False,
-            dca_base_order=pick(self.alpaca_dca_base_order, d["base_order"]),
-            dca_safety_order=pick(self.alpaca_dca_safety_order, d["safety_order"]),
-            dca_max_safety_orders=pick(self.alpaca_dca_max_safety_orders, d["max_safety_orders"]),
-            dca_price_deviation_pct=pick(self.alpaca_dca_price_deviation_pct, d["price_deviation_pct"]),
-            dca_take_profit_pct=pick(self.alpaca_dca_take_profit_pct, d["take_profit_pct"]),
-            dca_stop_loss_pct=pick(self.alpaca_dca_stop_loss_pct, d["stop_loss_pct"]),
-        )
-        derived.validate()  # поймать перебор бюджета/символов до старта
-        return derived
 
     @property
     def symbol(self) -> str:

@@ -1,56 +1,41 @@
-"""Менеджер бота: управляет потоками трейдеров сразу нескольких брокеров
-(Binance — крипта, Alpaca — акции). Старт/стоп/перезапуск, смена режима
-(тест/paper ↔ боевой) с закрытием позиций, доступ к позициям/балансам/ордерам.
+"""Менеджер бота: управляет потоком трейдера (Binance — крипта).
 
-Дашборд обращается к синглтону `instance`.
+Старт/стоп/перезапуск, смена режима (testnet ↔ боевой) с закрытием позиций,
+доступ к позициям/балансам/ордерам. Дашборд обращается к синглтону `instance`.
 """
 from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
 
 import settings_store
 from config import Config
-from main import create_traders
+from main import create_trader
 
 log = logging.getLogger("bot.manager")
-
-
-@dataclass
-class Unit:
-    name: str
-    trader: object
-    thread: threading.Thread
-    stop_event: threading.Event
-
-
-def _mode_of(name: str, trader) -> str:
-    c = trader.cfg
-    if name == "alpaca":
-        return "paper" if c.testnet else "live"
-    if c.dry_run:
-        return "dry"
-    return "test" if c.testnet else "live"
 
 
 class BotManager:
     def __init__(self):
         self._lock = threading.RLock()
         self.cfg: Config | None = None
-        self.units: list[Unit] = []
-        self.errors: dict[str, str] = {}
+        self.trader = None
+        self.thread: threading.Thread | None = None
+        self.stop_event: threading.Event | None = None
+        self.error: str | None = None
 
     @property
     def running(self) -> bool:
-        return any(u.thread.is_alive() for u in self.units)
+        return self.thread is not None and self.thread.is_alive()
 
     @property
-    def error(self) -> str | None:
-        return "; ".join(f"{k}: {v}" for k, v in self.errors.items()) or None
-
-    def _unit(self, name: str) -> Unit | None:
-        return next((u for u in self.units if u.name == name), None)
+    def mode(self) -> str:
+        """dry — симуляция, test — testnet, live — реальные деньги."""
+        if self.cfg is None:
+            return "—"
+        if self.cfg.dry_run:
+            return "dry"
+        return "test" if self.cfg.testnet else "live"
 
     # ── Жизненный цикл ─────────────────────────────────────────────────
     def start(self) -> None:
@@ -59,76 +44,65 @@ class BotManager:
                 return
             try:
                 self.cfg = Config.load()
-            except Exception as exc:  # noqa: BLE001
-                self.errors = {"config": str(exc)}
-                log.error("Конфиг не загружен: %s", exc)
+                self.trader = create_trader(self.cfg, log)
+                self.error = None
+            except Exception as exc:  # noqa: BLE001 — показываем причину в окне
+                self.error = str(exc)
+                self.trader = None
+                log.error("Бот не запущен: %s", exc)
                 return
-            built, self.errors = create_traders(self.cfg, log)
-            self.units = []
-            for name, trader in built:
-                ev = threading.Event()
-                th = threading.Thread(target=trader.run, args=(ev,), daemon=True)
-                th.start()
-                self.units.append(Unit(name, trader, th, ev))
-                log.info("Брокер %s запущен (режим: %s)", name, _mode_of(name, trader))
+            self.stop_event = threading.Event()
+            self.thread = threading.Thread(
+                target=self.trader.run, args=(self.stop_event,), daemon=True)
+            self.thread.start()
+            log.info("Бот запущен (режим: %s, монеты: %s)",
+                     self.mode, ", ".join(self.cfg.symbols))
 
     def stop(self) -> None:
         with self._lock:
-            units = list(self.units)
-            for u in units:
-                u.stop_event.set()
-        for u in units:
-            u.thread.join(timeout=15)
+            if self.stop_event:
+                self.stop_event.set()
+            th = self.thread
+        if th:
+            th.join(timeout=15)
         with self._lock:
-            self.units = []
+            self.thread = None
 
     def restart(self) -> None:
         self.stop()
         self.start()
 
     # ── Действия панели ────────────────────────────────────────────────
-    def flatten(self, broker: str | None = None) -> int:
+    def flatten(self) -> int:
+        """Закрывает все открытые позиции в рынок. Возвращает число закрытых."""
         with self._lock:
-            targets = [u for u in self.units if broker in (None, u.name)]
-        closed = 0
-        for u in targets:
-            try:
-                closed += u.trader.close_all_positions()
-            except Exception as exc:  # noqa: BLE001
-                log.error("Не удалось закрыть позиции (%s): %s", u.name, exc)
-        return closed
+            trader = self.trader
+        if trader is None:
+            return 0
+        try:
+            return trader.close_all_positions()
+        except Exception as exc:  # noqa: BLE001
+            log.error("Не удалось закрыть позиции: %s", exc)
+            return 0
 
-    def switch_mode(self, broker: str, target: str) -> dict:
-        """broker: binance|alpaca. target: для binance test|live, для alpaca paper|live.
-        Перед уходом из боевого в тест/paper закрываем открытые боевые позиции."""
+    def switch_mode(self, target: str) -> dict:
+        """target: 'test' (testnet) или 'live' (реальные деньги).
+        Перед уходом из боевого в testnet закрываем открытые позиции."""
+        if target not in ("test", "live"):
+            return {"ok": False, "error": "режим: test|live"}
+        going_safe = target == "test"
         with self._lock:
-            unit = self._unit(broker)
-            currently_live = unit is not None and _mode_of(broker, unit.trader) == "live"
-
-        if broker == "binance":
-            if target not in ("test", "live"):
-                return {"ok": False, "error": "режим binance: test|live"}
-            going_safe = target == "test"
-            env_key, env_val = "TESTNET", "true" if going_safe else "false"
-        elif broker == "alpaca":
-            if target not in ("paper", "live"):
-                return {"ok": False, "error": "режим alpaca: paper|live"}
-            going_safe = target == "paper"
-            env_key, env_val = "ALPACA_PAPER", "true" if going_safe else "false"
-        else:
-            return {"ok": False, "error": "неизвестный брокер"}
-
+            currently_live = self.mode == "live"
         closed = 0
         if going_safe and currently_live:
             try:
-                closed = self.flatten(broker)
+                closed = self.flatten()
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": f"закрытие позиций: {exc}"}
-        settings_store.set_value(env_key, env_val)
-        if broker == "binance":
-            settings_store.set_value("DRY_RUN", "false")
+        settings_store.set_value("TESTNET", "true" if going_safe else "false")
+        settings_store.set_value("DRY_RUN", "false")
         self.restart()
-        return {"ok": True, "closed": closed, "error": self.error}
+        return {"ok": True, "closed": closed, "mode": self.mode, "error": self.error}
 
     def apply_settings(self, values: dict) -> dict:
         changed = settings_store.save_settings(values)
@@ -138,81 +112,64 @@ class BotManager:
     # ── Чтение состояния ───────────────────────────────────────────────
     def info(self) -> dict:
         with self._lock:
-            units = [{
-                "name": u.name,
-                "mode": _mode_of(u.name, u.trader),
-                "running": u.thread.is_alive(),
-                "symbols": list(u.trader.cfg.symbols),
-                "budget": u.trader.cfg.trade_quote_amount,
-            } for u in self.units]
-        return {"running": self.running, "units": units, "error": self.error,
-                "errors": self.errors}
+            cfg = self.cfg
+        return {
+            "running": self.running,
+            "mode": self.mode,
+            "symbols": list(cfg.symbols) if cfg else [],
+            "budget": cfg.trade_quote_amount if cfg else 0.0,
+            "strategy": cfg.strategy if cfg else None,
+            "error": self.error,
+        }
 
     def positions(self) -> list[dict]:
-        out: list[dict] = []
         with self._lock:
-            units = list(self.units)
-        for u in units:
-            try:
-                for p in u.trader.snapshot():
-                    out.append({**p, "broker": u.name})
-            except Exception as exc:  # noqa: BLE001
-                log.error("Позиции (%s) недоступны: %s", u.name, exc)
-        return out
+            trader = self.trader
+        if trader is None:
+            return []
+        try:
+            return trader.snapshot()
+        except Exception as exc:  # noqa: BLE001
+            log.error("Позиции недоступны: %s", exc)
+            return []
 
     def balances(self) -> dict:
-        out: dict = {}
         with self._lock:
-            units = list(self.units)
-        for u in units:
-            try:
-                out[u.name] = u.trader.ex.balances()
-            except Exception as exc:  # noqa: BLE001
-                log.error("Балансы (%s) недоступны: %s", u.name, exc)
-        return out
+            trader = self.trader
+        if trader is None:
+            return {}
+        try:
+            return trader.ex.balances()
+        except Exception as exc:  # noqa: BLE001
+            log.error("Балансы недоступны: %s", exc)
+            return {}
 
     def open_orders(self) -> list:
-        out: list = []
         with self._lock:
-            units = list(self.units)
-        for u in units:
-            try:
-                for o in u.trader.ex.open_orders():
-                    out.append({**o, "broker": u.name})
-            except Exception as exc:  # noqa: BLE001
-                log.error("Ордера (%s) недоступны: %s", u.name, exc)
-        return out
+            trader = self.trader
+        if trader is None:
+            return []
+        try:
+            return trader.ex.open_orders()
+        except Exception as exc:  # noqa: BLE001
+            log.error("Ордера недоступны: %s", exc)
+            return []
 
-    def allocation(self) -> dict:
-        """Текущее vs рекомендуемое распределение бюджета по волатильности."""
-        from portfolio import ASSET_CLASS_VOL, split_budget
-        with self._lock:
-            units = [(u.name, u.trader.cfg.trade_quote_amount) for u in self.units]
-            cmw = self.cfg.crypto_max_weight if self.cfg else 0.15
-        if not units:
-            return {"enabled": False}
-        current = {n: b for n, b in units}
-        total = round(sum(current.values()), 2)
-        vols = {n: ASSET_CLASS_VOL.get(n, 30.0) for n, _ in units}
-        return {"enabled": True, "total": total, "current": current,
-                "recommended": split_budget(total, vols, cmw),
-                "crypto_max_weight": cmw}
-
-    def backtest(self, source: str, symbol: str, interval: str, limit: int) -> dict:
-        """Прогон DCA-стратегии брокера по историческим барам символа."""
+    def backtest(self, symbol: str, interval: str, limit: int) -> dict:
+        """Прогон DCA-стратегии по историческим свечам монеты."""
         from dca import simulate_dca
         from dca_trader import params_from_config
         with self._lock:
-            unit = self._unit(source)
-        if unit is None:
-            return {"error": f"брокер {source} не запущен"}
+            trader = self.trader
+        if trader is None:
+            return {"error": "бот не запущен"}
         try:
-            closes = unit.trader.ex.get_closes(symbol, interval, limit)
+            closes = trader.ex.get_closes(symbol, interval, limit)
         except Exception as exc:  # noqa: BLE001
-            return {"error": f"не удалось получить бары: {exc}"}
+            return {"error": f"не удалось получить свечи: {exc}"}
         if len(closes) < 2:
             return {"error": "недостаточно исторических данных"}
-        cfg = unit.trader.cfg
+        cfg = trader.cfg
         res = simulate_dca(closes, params_from_config(cfg),
                            cfg.trade_quote_amount, cfg.fee_pct)
         res.update({"symbol": symbol, "interval": interval, "bars": len(closes),
@@ -221,11 +178,11 @@ class BotManager:
 
     def deposit_address(self, coin: str, network: str | None) -> dict:
         with self._lock:
-            unit = self._unit("binance")
-        if unit is None:
-            return {"address": "", "note": "Binance не запущен"}
+            trader = self.trader
+        if trader is None:
+            return {"address": "", "note": "бот не запущен"}
         try:
-            return unit.trader.ex.deposit_address(coin, network)
+            return trader.ex.deposit_address(coin, network)
         except Exception as exc:  # noqa: BLE001
             return {"address": "", "note": f"ошибка: {exc}"}
 
