@@ -33,8 +33,18 @@ def create_trader(cfg: Config, log: logging.Logger):
     # Проверка ключей и прав доступа до начала торговли.
     if not cfg.dry_run:
         info = exchange.verify_credentials(expect_withdraw=cfg.withdraw_enabled)
-        log.info("Ключи OK | canTrade=%s | балансы: %s",
-                 info["can_trade"], info["balances"] or "пусто")
+        # На testnet в аккаунте лежат сотни фейковых монет — целиком этот словарь
+        # раздувал каждую строку старта до килобайт. Показываем только то, чем
+        # реально торгуем, остальное — счётчиком.
+        bal = info["balances"] or {}
+        used: set[str] = set()
+        for sym in cfg.symbols:
+            quote = exchange.quote_asset(sym)
+            used.update({quote, sym[: -len(quote)] if sym.endswith(quote) else sym})
+        shown = {k: v for k, v in bal.items() if k in used}
+        log.info("Ключи OK | canTrade=%s | балансы: %s%s",
+                 info["can_trade"], shown or "пусто",
+                 f" (+ещё {len(bal) - len(shown)} активов)" if len(bal) > len(shown) else "")
         if not info["can_trade"]:
             raise PermissionError("Аккаунт не может торговать (canTrade=false).")
 

@@ -7,6 +7,16 @@ set -e
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$DIR"
 
+# bot.log — это перехваченный launchd вывод, он не ротируется сам и за месяцы
+# вырастает до сотен МБ. Подробный лог всё равно лежит в logs/<дата>/<час>.log,
+# поэтому при старте оставляем только последний хвост.
+if [ -f bot.log ] && [ "$(wc -c < bot.log)" -gt 10485760 ]; then
+  tail -c 1048576 bot.log > bot.log.tmp && mv bot.log.tmp bot.log
+fi
+
+# Логи старше 60 дней не нужны — чистим, чтобы папка не росла бесконечно.
+find logs -mindepth 1 -maxdepth 1 -type d -mtime +60 -exec rm -rf {} + 2>/dev/null || true
+
 # Активируем виртуальное окружение, если оно есть.
 if [ -f ".venv/bin/activate" ]; then
   # shellcheck disable=SC1091
