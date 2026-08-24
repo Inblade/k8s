@@ -35,6 +35,35 @@ def params_from_config(cfg: Config) -> DcaParams:
     )
 
 
+def is_network_error(exc: BaseException) -> bool:
+    """Сбой связи (сон ноутбука, пропавший Wi-Fi, таймаут биржи), а не баг в коде.
+
+    Ловим по имени класса, чтобы не тащить requests/urllib3 в импорты и не
+    зависеть от того, во что именно python-binance завернул ошибку.
+    """
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = type(cur).__name__
+        if name in {"ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
+                    "TimeoutError", "ConnectionResetError", "ConnectionAbortedError",
+                    "ConnectionRefusedError", "NameResolutionError", "NewConnectionError",
+                    "MaxRetryError", "ProtocolError", "SSLError", "SSLEOFError",
+                    "ChunkedEncodingError", "RequestException", "gaierror", "OSError"}:
+            return True
+        # Биржа отдала HTML вместо JSON (заглушка Cloudflare/техработы).
+        if name == "BinanceAPIException" and "Invalid JSON" in str(cur):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _short_error(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    return text[:160] + "…" if len(text) > 160 else text
+
+
 def _state_file(symbol: str) -> Path:
     return DIR / f"dca_state_{symbol}.json"
 
@@ -130,9 +159,12 @@ class DcaTrader:
         realized = self.withdrawer.state.realized_pnl_total
         unrealized = total_value - total_spent
         equity = self.cfg.trade_quote_amount + realized + unrealized
-        # В колонку price пишем цену первой (основной) монеты — для графика цены.
+        # В колонки price и position_qty пишем данные первой (основной) монеты:
+        # складывать qty разных монет бессмысленно, а ноль вместо количества
+        # делал журнал недостоверным (позиция есть, а в CSV 0).
+        main = self.engines[self.cfg.symbol].state
         journal.record_equity(
-            price=prices[self.cfg.symbol], position_qty=0.0, position_value=total_value,
+            price=prices[self.cfg.symbol], position_qty=main.qty, position_value=total_value,
             unrealized_pnl=unrealized, realized_pnl=realized, equity=equity,
             withdrawn=self.withdrawer.state.withdrawn_total,
             reserve=self.withdrawer.state.reserve, source=self.source,
@@ -259,11 +291,17 @@ class DcaTrader:
     def run(self, stop_event=None) -> None:
         log.info(
             "Старт DCA | монеты: %s | DRY_RUN=%s TESTNET=%s | база=%.0f safety=%.0f x%d "
-            "дев=%.1f%% TP=%.1f%% | бюджет/монета=%.0f, всего=%.0f USDT",
+            "дев=%.1f%% TP=%.1f%% | стоп-лосс=%s | тренд-фильтр=%s "
+            "| бюджет/монета=%.0f, всего=%.0f USDT",
             ", ".join(self.cfg.symbols), self.ex.dry_run, self.ex.testnet,
             self.cfg.dca_base_order, self.cfg.dca_safety_order,
             self.cfg.dca_max_safety_orders, self.cfg.dca_price_deviation_pct,
-            self.cfg.dca_take_profit_pct, self.cfg.max_dca_budget(),
+            self.cfg.dca_take_profit_pct,
+            # Защиту видно в логе явно: молча выключенный стоп-лосс — худший из сюрпризов.
+            f"{self.cfg.dca_stop_loss_pct:.0f}%" if self.cfg.dca_stop_loss_pct > 0 else "ВЫКЛ",
+            f"MA{self.cfg.dca_trend_ma_period}/{self.cfg.dca_trend_interval}"
+            if self.cfg.dca_trend_filter_enabled else "ВЫКЛ",
+            self.cfg.max_dca_budget(),
             self.cfg.max_dca_budget() * len(self.cfg.symbols),
         )
         if self.controller is not None:
@@ -271,11 +309,23 @@ class DcaTrader:
                      "оптимизация параметров каждые %d шагов (optimize=%s)",
                      self.cfg.regime_interval, self.cfg.reoptimize_every,
                      self.cfg.adaptive_optimize)
+        offline = 0  # сколько шагов подряд не смогли достучаться до биржи
         while stop_event is None or not stop_event.is_set():
             try:
                 self.step()
+                if offline:
+                    log.info("Связь с биржей восстановлена (было %d неудачных шагов)", offline)
+                    offline = 0
             except Exception as exc:  # noqa: BLE001 — бот не должен падать из-за разовой ошибки
-                log.exception("Ошибка в цикле DCA: %s", exc)
+                if is_network_error(exc):
+                    # Ноутбук уснул / пропал Wi-Fi: это не баг, полный traceback каждую
+                    # минуту раздувал лог до десятков МБ. Пишем кратко и с прореживанием.
+                    offline += 1
+                    if offline == 1 or offline % 30 == 0:
+                        log.warning("Биржа недоступна (%d шаг(ов) подряд): %s",
+                                    offline, _short_error(exc))
+                else:
+                    log.exception("Ошибка в цикле DCA: %s", exc)
             # Сон, прерываемый остановкой.
             if stop_event is not None:
                 if stop_event.wait(self.cfg.poll_interval_seconds):

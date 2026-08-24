@@ -468,6 +468,50 @@ class TestDcaTrader(unittest.TestCase):
         # equity = бюджет + realized + unrealized; сразу после покупки ~ бюджет
         self.assertAlmostEqual(float(last["equity"]), 250.0, delta=1.0)
 
+    def test_equity_records_position_qty(self):
+        """В журнале капитала должно быть реальное количество монеты, а не ноль."""
+        from dca_trader import DcaTrader
+        cfg = make_cfg(symbols=["BTCUSDT"])
+        ex = FakeExchange()
+        t = DcaTrader(cfg, ex)
+        ex.set_price(100); t.step()
+        last = journal.read_csv(journal.EQUITY_CSV)[-1]
+        qty = float(last["position_qty"])
+        self.assertGreater(qty, 0.0)
+        self.assertAlmostEqual(qty, t.engines["BTCUSDT"].state.qty, places=8)
+        # значение согласовано со стоимостью позиции
+        self.assertAlmostEqual(qty * 100, float(last["position_value"]), delta=0.01)
+
+
+# ─────────────────────────── распознавание сбоев связи ───────────────────────────
+class TestNetworkErrorDetection(unittest.TestCase):
+    def test_network_errors_recognised(self):
+        from dca_trader import is_network_error
+        for exc in (ConnectionResetError(54, "Connection reset by peer"),
+                    TimeoutError("read timed out"),
+                    OSError(49, "Can't assign requested address")):
+            self.assertTrue(is_network_error(exc), exc)
+
+    def test_wrapped_cause_recognised(self):
+        """python-binance заворачивает сетевую ошибку — важно достать причину."""
+        from dca_trader import is_network_error
+        try:
+            try:
+                raise ConnectionResetError(54, "reset")
+            except ConnectionResetError as inner:
+                raise RuntimeError("обёртка") from inner
+        except RuntimeError as exc:
+            self.assertTrue(is_network_error(exc))
+
+    def test_real_bug_is_not_network(self):
+        from dca_trader import is_network_error
+        self.assertFalse(is_network_error(ValueError("плохие параметры")))
+        self.assertFalse(is_network_error(KeyError("BTCUSDT")))
+
+    def test_short_error_is_trimmed(self):
+        from dca_trader import _short_error
+        self.assertLessEqual(len(_short_error(RuntimeError("x" * 500))), 161)
+
 
 # ─────────────────────────── ключи под режим ───────────────────────────
 class TestConfigKeys(unittest.TestCase):

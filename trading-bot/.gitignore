@@ -1,4 +1,6 @@
 .env
+.env.bak*
+.env.*.bak
 __pycache__/
 *.pyc
 state.json
@@ -15,3 +17,4 @@ logs/
 .venv/
 venv/
 .bot.lock
+.DS_Store

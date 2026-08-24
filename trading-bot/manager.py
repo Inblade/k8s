@@ -10,9 +10,19 @@ import threading
 
 import settings_store
 from config import Config
+from dca_trader import _short_error, is_network_error
 from main import create_trader
 
 log = logging.getLogger("bot.manager")
+
+
+def _log_api_error(what: str, exc: BaseException) -> None:
+    """Сбой связи — это шум (дашборд опрашивает биржу каждые несколько секунд),
+    поэтому пишем его коротко и как WARNING; всё остальное — как ошибку."""
+    if is_network_error(exc):
+        log.warning("%s: нет связи с биржей (%s)", what, _short_error(exc))
+    else:
+        log.error("%s: %s", what, exc)
 
 
 class BotManager:
@@ -130,7 +140,7 @@ class BotManager:
         try:
             return trader.snapshot()
         except Exception as exc:  # noqa: BLE001
-            log.error("Позиции недоступны: %s", exc)
+            _log_api_error("Позиции недоступны", exc)
             return []
 
     def balances(self) -> dict:
@@ -141,7 +151,7 @@ class BotManager:
         try:
             return trader.ex.balances()
         except Exception as exc:  # noqa: BLE001
-            log.error("Балансы недоступны: %s", exc)
+            _log_api_error("Балансы недоступны", exc)
             return {}
 
     def open_orders(self) -> list:
@@ -152,7 +162,7 @@ class BotManager:
         try:
             return trader.ex.open_orders()
         except Exception as exc:  # noqa: BLE001
-            log.error("Ордера недоступны: %s", exc)
+            _log_api_error("Ордера недоступны", exc)
             return []
 
     def backtest(self, symbol: str, interval: str, limit: int) -> dict:
