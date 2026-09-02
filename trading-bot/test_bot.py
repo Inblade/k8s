@@ -844,5 +844,86 @@ class TestSwingTrader(unittest.TestCase):
         Trader(cfg, ex).step()  # не должно бросать
 
 
+# ─────────────────────────── шум в логах ───────────────────────────
+class TestLogNoise(unittest.TestCase):
+    """bot.log — это перехваченный launchd stdout, и на ходу он не ротируется:
+    файл открыт как stdout живого процесса. Значит всё лишнее, что уходит в
+    консоль, копится там неделями до ближайшего рестарта."""
+
+    def setUp(self):
+        root = logging.getLogger()
+        self.saved_handlers = list(root.handlers)
+        self.saved_level = root.level
+        self.saved_werkzeug = logging.getLogger("werkzeug").level
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        root = logging.getLogger()
+        # Почасовой хендлер держит открытый файл — закрываем свои, чужие нет.
+        for h in root.handlers:
+            if h not in self.saved_handlers:
+                h.close()
+        root.handlers[:] = self.saved_handlers
+        root.setLevel(self.saved_level)
+        logging.getLogger("werkzeug").setLevel(self.saved_werkzeug)
+        self.tmp.cleanup()
+
+    def _setup(self, **kwargs):
+        """setup_logging с почасовыми файлами во временном каталоге."""
+        import logsetup
+        real = logsetup.HourlyDirHandler
+        tmp_dir = Path(self.tmp.name)
+        with mock.patch.object(logsetup, "HourlyDirHandler",
+                               lambda: real(tmp_dir)):
+            logsetup.setup_logging(**kwargs)
+
+    @staticmethod
+    def _passes(handler, level) -> bool:
+        """Пропустит ли хендлер запись такого уровня (NOTSET=0 пропускает всё)."""
+        return level >= handler.level
+
+    @staticmethod
+    def _console():
+        return next(h for h in logging.getLogger().handlers
+                    if type(h) is logging.StreamHandler)
+
+    @staticmethod
+    def _hourly():
+        import logsetup
+        return next(h for h in logging.getLogger().handlers
+                    if isinstance(h, logsetup.HourlyDirHandler))
+
+    def test_werkzeug_access_lines_are_muted(self):
+        """Дашборд дёргает 4 эндпоинта раз в минуту — 5760 строк «200 OK» в сутки."""
+        self._setup()
+        self.assertFalse(logging.getLogger("werkzeug").isEnabledFor(logging.INFO))
+
+    def test_werkzeug_problems_still_logged(self):
+        """Глушим доступ, но не 4xx/5xx и не падения самого сервера."""
+        self._setup()
+        self.assertTrue(logging.getLogger("werkzeug").isEnabledFor(logging.WARNING))
+
+    def test_headless_console_drops_heartbeat(self):
+        """В фоне пульс не должен утекать в bot.log через stdout."""
+        self._setup(console_level=logging.WARNING)
+        console = self._console()
+        self.assertFalse(self._passes(console, logging.INFO))
+        self.assertTrue(self._passes(console, logging.WARNING))
+
+    def test_window_mode_keeps_console_verbose(self):
+        """С окном консоль читает человек — там пульс как раз нужен."""
+        self._setup()
+        self.assertTrue(self._passes(self._console(), logging.INFO))
+
+    def test_hourly_file_keeps_everything(self):
+        """Тихая консоль не должна обеднять logs/<дата>/<час>.log."""
+        self._setup(console_level=logging.WARNING)
+        self.assertTrue(self._passes(self._hourly(), logging.INFO))
+        logging.getLogger("bot.dca").info("Цена=1 средняя=2")
+        written = "".join(f.read_text(encoding="utf-8")
+                          for f in Path(self.tmp.name).rglob("*.log"))
+        self.assertIn("Цена=1", written)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
