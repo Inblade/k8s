@@ -12,6 +12,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -923,6 +924,55 @@ class TestLogNoise(unittest.TestCase):
         written = "".join(f.read_text(encoding="utf-8")
                           for f in Path(self.tmp.name).rglob("*.log"))
         self.assertIn("Цена=1", written)
+
+
+# ─────────────────────────── подрезка bot.log ───────────────────────────
+class TestBotLogTrim(unittest.TestCase):
+    """launchd открывает StandardOutPath ДО запуска run.sh, поэтому подрезка
+    обязана сохранять inode: подменишь файл — и stdout бота останется писать в
+    безымянный старый inode, а bot.log на диске замрёт навсегда."""
+
+    RUN_SH = Path(__file__).with_name("deploy") / "run.sh"
+
+    def _trim_block(self) -> str:
+        """Тот же код, что реально выполняется при старте — не копия."""
+        lines = self.RUN_SH.read_text(encoding="utf-8").splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.startswith("if [ -f bot.log ]"))
+        end = next(i for i in range(start, len(lines)) if lines[i] == "fi")
+        return "\n".join(lines[start:end + 1])
+
+    def _run(self, size: int):
+        """Кладём лог заданного размера и выполняем подрезку так, как launchd:
+        stdout уже открыт на этом файле до запуска скрипта."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "bot.log"
+            log.write_bytes(b"noise\n" * (size // 6 + 1))
+            before = log.stat().st_ino
+            with log.open("a") as inherited_stdout:
+                subprocess.run(["bash", "-c", self._trim_block() + "\necho MARKER"],
+                               cwd=tmp, stdout=inherited_stdout,
+                               stderr=subprocess.DEVNULL, check=True)
+            return before, log.stat().st_ino, log.read_bytes()
+
+    def test_trim_keeps_inode_and_process_output(self):
+        before, after, data = self._run(3 * 1024 * 1024)
+        self.assertEqual(before, after, "inode подменён — вывод бота уйдёт в никуда")
+        self.assertIn(b"MARKER", data, "запись после подрезки потеряна")
+        self.assertLess(len(data), 512 * 1024, "файл не подрезан")
+
+    def test_small_log_untouched(self):
+        before, after, data = self._run(1024)
+        self.assertEqual(before, after)
+        self.assertIn(b"MARKER", data)
+        self.assertIn(b"noise", data, "маленький лог не должен обрезаться")
+
+    def test_threshold_is_reachable_within_a_year(self):
+        """Подрезка случается раз за аптайм, а бот живёт неделями: порог,
+        которого не достичь, — это отсутствие подрезки."""
+        text = self.RUN_SH.read_text(encoding="utf-8")
+        threshold = int(re.search(r'-gt (\d+)', text).group(1))
+        self.assertLessEqual(threshold, 4 * 1024 * 1024)
 
 
 if __name__ == "__main__":
