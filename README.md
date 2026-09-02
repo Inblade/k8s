@@ -5,7 +5,7 @@ international contemporary watercolour project (a clean, maintainable rebuild
 of `jkochetova.com`).
 
 ## Editing the site
-**You do not need to know how to code.** Just tell Claude in chat what you want
+**You do not need to know how to code.** Just tell the assistant in chat what you want
 changed. Full plain-language guide (in Russian):
 **[`КАК-РЕДАКТИРОВАТЬ-САЙТ.md`](./КАК-РЕДАКТИРОВАТЬ-САЙТ.md)**.
 
@@ -45,7 +45,7 @@ The site is ready for **GitHub Pages**. Enable it once under
 connecting the `jkochetova.com` domain) are in the editing guide above.
 
 > ℹ️ The real texts and photos still need to be filled in — every spot marked
-> with a yellow `ЗАМЕНИТЬ` tag. Send them to Claude in chat and they'll be
+> with a yellow `ЗАМЕНИТЬ` tag. Send them to the assistant in chat and they'll be
 > placed for you. (The live Wix site could not be auto-copied from the build
 > environment — Wix blocks automated access — so the content is added manually.)
 
