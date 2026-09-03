@@ -10,7 +10,7 @@ import threading
 
 import settings_store
 from config import Config
-from dca_trader import _short_error, is_network_error
+from exchange import SuspectPrice, _short_error, is_network_error
 from main import create_trader
 
 log = logging.getLogger("bot.manager")
@@ -19,7 +19,10 @@ log = logging.getLogger("bot.manager")
 def _log_api_error(what: str, exc: BaseException) -> None:
     """Сбой связи — это шум (дашборд опрашивает биржу каждые несколько секунд),
     поэтому пишем его коротко и как WARNING; всё остальное — как ошибку."""
-    if is_network_error(exc):
+    if isinstance(exc, SuspectPrice):
+        # Не сбой: фильтр отработал штатно и не дал показать недостоверную цену.
+        log.warning("%s: цена не прошла проверку (%s)", what, exc)
+    elif is_network_error(exc):
         log.warning("%s: нет связи с биржей (%s)", what, _short_error(exc))
     else:
         log.error("%s: %s", what, exc)

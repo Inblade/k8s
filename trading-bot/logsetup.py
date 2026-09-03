@@ -46,6 +46,15 @@ class HourlyDirHandler(logging.Handler):
         except Exception:  # noqa: BLE001 — логирование не должно ронять бота
             self.handleError(record)
 
+    def close(self) -> None:
+        # Базовый Handler.close() поток не трогает — открытый файл утекал бы
+        # при каждой пересборке логирования.
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
+            self._key = None
+        super().close()
+
 
 def setup_logging(level: int = logging.INFO,
                   console_level: int | None = None) -> None:

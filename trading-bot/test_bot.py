@@ -487,7 +487,7 @@ class TestDcaTrader(unittest.TestCase):
 # ─────────────────────────── распознавание сбоев связи ───────────────────────────
 class TestNetworkErrorDetection(unittest.TestCase):
     def test_network_errors_recognised(self):
-        from dca_trader import is_network_error
+        from exchange import is_network_error
         for exc in (ConnectionResetError(54, "Connection reset by peer"),
                     TimeoutError("read timed out"),
                     OSError(49, "Can't assign requested address")):
@@ -495,7 +495,7 @@ class TestNetworkErrorDetection(unittest.TestCase):
 
     def test_wrapped_cause_recognised(self):
         """python-binance заворачивает сетевую ошибку — важно достать причину."""
-        from dca_trader import is_network_error
+        from exchange import is_network_error
         try:
             try:
                 raise ConnectionResetError(54, "reset")
@@ -505,12 +505,12 @@ class TestNetworkErrorDetection(unittest.TestCase):
             self.assertTrue(is_network_error(exc))
 
     def test_real_bug_is_not_network(self):
-        from dca_trader import is_network_error
+        from exchange import is_network_error
         self.assertFalse(is_network_error(ValueError("плохие параметры")))
         self.assertFalse(is_network_error(KeyError("BTCUSDT")))
 
     def test_short_error_is_trimmed(self):
-        from dca_trader import _short_error
+        from exchange import _short_error
         self.assertLessEqual(len(_short_error(RuntimeError("x" * 500))), 161)
 
 
@@ -973,6 +973,101 @@ class TestBotLogTrim(unittest.TestCase):
         text = self.RUN_SH.read_text(encoding="utf-8")
         threshold = int(re.search(r'-gt (\d+)', text).group(1))
         self.assertLessEqual(threshold, 4 * 1024 * 1024)
+
+
+# ─────────────────────────── выбросы в ленте цен ───────────────────────────
+class TestPriceOutlierGuard(unittest.TestCase):
+    """На testnet один тик проваливался на 6–18% и через минуту возвращался.
+    Бот успевал докупить на провале и продать на возврате: 63% всей прибыли
+    пришло с таких тиков. Ни один из них не был настоящим движением рынка."""
+
+    def guard(self, **kw):
+        from exchange import Exchange
+        ex = Exchange.__new__(Exchange)          # без сети и ключей
+        ex.max_jump_pct = kw.get("max_jump_pct", 5.0)
+        ex.confirm_ticks = kw.get("confirm_ticks", 2)
+        ex.stale_seconds = kw.get("stale_seconds", 600.0)
+        ex._last, ex._rejected = {}, {}
+        return ex
+
+    def feed(self, ex, prices, step=60.0, start=0.0):
+        """Прогоняет ленту цен; отвергнутые тики отмечаются как None."""
+        from exchange import SuspectPrice
+        out, t = [], start
+        for price in prices:
+            try:
+                out.append(ex._checked("BTCUSDT", price, t))
+            except SuspectPrice:
+                out.append(None)
+            t += step
+        return out
+
+    def test_real_spike_is_rejected(self):
+        """Ровно тот случай 1 сентября: 77872 -> 63600 -> 77823."""
+        got = self.feed(self.guard(), [77872.0, 63600.0, 77822.89])
+        self.assertEqual(got[0], 77872.0)
+        self.assertIsNone(got[1], "выброс -18% должен быть отвергнут")
+        self.assertEqual(got[2], 77822.89, "после возврата торговля продолжается")
+
+    def test_normal_movement_passes(self):
+        got = self.feed(self.guard(), [77000.0, 78000.0, 79500.0, 78200.0])
+        self.assertNotIn(None, got, "обычный ход рынка отвергать нельзя")
+
+    def test_sustained_crash_is_accepted(self):
+        """Настоящий обвал обязан пройти, иначе бот замрёт навсегда."""
+        got = self.feed(self.guard(), [78000.0, 62000.0, 61500.0, 61000.0])
+        self.assertIsNone(got[1], "первый тик обвала ещё не подтверждён")
+        self.assertEqual(got[2], 61500.0, "второй тик подтверждает движение")
+        self.assertEqual(got[3], 61000.0)
+
+    def test_counter_resets_after_normal_tick(self):
+        """Два выброса в разное время не должны складываться в подтверждение."""
+        got = self.feed(self.guard(), [78000.0, 62000.0, 77900.0, 62000.0])
+        self.assertIsNone(got[1])
+        self.assertEqual(got[2], 77900.0)
+        self.assertIsNone(got[3], "счётчик обнулился — снова одиночный выброс")
+
+    def test_stale_reference_is_not_compared(self):
+        """После долгой паузы сравнивать не с чем: рынок ушёл, и это нормально."""
+        ex = self.guard()
+        ex._checked("BTCUSDT", 78000.0, 0.0)
+        self.assertEqual(ex._checked("BTCUSDT", 62000.0, 1200.0), 62000.0)
+
+    def test_first_tick_always_passes(self):
+        self.assertEqual(self.guard()._checked("BTCUSDT", 78000.0, 0.0), 78000.0)
+
+    def test_disabled_guard_passes_everything(self):
+        got = self.feed(self.guard(max_jump_pct=0), [78000.0, 63600.0])
+        self.assertNotIn(None, got)
+
+    def test_symbols_are_independent(self):
+        """Выброс по одной монете не должен влиять на другую."""
+        from exchange import SuspectPrice
+        ex = self.guard()
+        ex._checked("BTCUSDT", 78000.0, 0.0)
+        ex._checked("ETHUSDT", 3000.0, 0.0)
+        with self.assertRaises(SuspectPrice):
+            ex._checked("BTCUSDT", 63000.0, 60.0)
+        self.assertEqual(ex._checked("ETHUSDT", 3010.0, 60.0), 3010.0)
+
+    def test_garbage_price_is_rejected_not_remembered(self):
+        """Нулевая цена, принятая как опора, обрушила бы следующее сравнение."""
+        from exchange import SuspectPrice
+        ex = self.guard()
+        ex._checked("BTCUSDT", 78000.0, 0.0)
+        for bad in (0.0, -1.0):
+            with self.assertRaises(SuspectPrice):
+                ex._checked("BTCUSDT", bad, 60.0)
+        self.assertEqual(ex._last["BTCUSDT"][0], 78000.0, "мусор стал опорой")
+        self.assertEqual(ex._checked("BTCUSDT", 78100.0, 120.0), 78100.0)
+
+    def test_garbage_price_on_first_tick(self):
+        """Мусор до первой нормальной цены — опоры ещё нет, делить не на что."""
+        from exchange import SuspectPrice
+        ex = self.guard()
+        with self.assertRaises(SuspectPrice):
+            ex._checked("BTCUSDT", 0.0, 0.0)
+        self.assertEqual(ex._checked("BTCUSDT", 78000.0, 60.0), 78000.0)
 
 
 if __name__ == "__main__":

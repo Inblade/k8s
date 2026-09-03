@@ -28,7 +28,10 @@ def create_trader(cfg: Config, log: logging.Logger):
                     cfg.withdraw_profit_pct, cfg.withdraw_address, cfg.withdraw_network,
                     cfg.withdraw_min_amount, cfg.withdraw_asset)
 
-    exchange = Exchange(cfg.api_key, cfg.api_secret, cfg.testnet, cfg.dry_run)
+    exchange = Exchange(cfg.api_key, cfg.api_secret, cfg.testnet, cfg.dry_run,
+                        max_jump_pct=cfg.price_max_jump_pct,
+                        confirm_ticks=cfg.price_confirm_ticks,
+                        stale_seconds=cfg.price_stale_seconds)
 
     # Проверка ключей и прав доступа до начала торговли.
     if not cfg.dry_run:

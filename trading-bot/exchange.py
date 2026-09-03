@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from decimal import ROUND_DOWN, Decimal
 
 from binance.client import Client
@@ -9,13 +10,66 @@ from binance.client import Client
 log = logging.getLogger("bot.exchange")
 
 
+class SuspectPrice(RuntimeError):
+    """Тик слишком далеко от предыдущего, чтобы ему верить.
+
+    Настоящая цена в этот момент неизвестна, поэтому её не подменяют и не
+    сглаживают: шаг просто пропускается, как при обрыве связи. Через минуту
+    придёт следующий тик, и если движение реальное — оно подтвердится.
+    """
+
+    def __init__(self, symbol: str, price: float, ref: float):
+        self.symbol, self.price, self.ref = symbol, price, ref
+        # ref нулевой, когда сравнивать было не с чем и цена сама по себе мусор.
+        deviation = f" ({(price / ref - 1) * 100:+.1f}%)" if ref > 0 else ""
+        super().__init__(f"{symbol}: тик {price:.2f} против {ref:.2f}{deviation}")
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """Сбой связи (сон ноутбука, пропавший Wi-Fi, таймаут биржи), а не баг в коде.
+
+    Ловим по имени класса, чтобы не тащить requests/urllib3 в импорты и не
+    зависеть от того, во что именно python-binance завернул ошибку.
+    """
+    seen = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = type(cur).__name__
+        if name in {"ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
+                    "TimeoutError", "ConnectionResetError", "ConnectionAbortedError",
+                    "ConnectionRefusedError", "NameResolutionError", "NewConnectionError",
+                    "MaxRetryError", "ProtocolError", "SSLError", "SSLEOFError",
+                    "ChunkedEncodingError", "RequestException", "gaierror", "OSError"}:
+            return True
+        # Биржа отдала HTML вместо JSON (заглушка Cloudflare/техработы).
+        if name == "BinanceAPIException" and "Invalid JSON" in str(cur):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _short_error(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    return text[:160] + "…" if len(text) > 160 else text
+
+
 class Exchange:
-    def __init__(self, api_key: str, api_secret: str, testnet: bool, dry_run: bool):
+    def __init__(self, api_key: str, api_secret: str, testnet: bool, dry_run: bool,
+                 max_jump_pct: float = 5.0, confirm_ticks: int = 2,
+                 stale_seconds: float = 600.0):
         self.dry_run = dry_run
         self.testnet = testnet
         # Для DRY_RUN без ключей всё равно нужен клиент для чтения свечей (публичные данные).
         self.client = Client(api_key or None, api_secret or None, testnet=testnet)
         self._info_cache: dict[str, dict] = {}
+
+        # Защита от выброса в ленте цен. 0 = выключена.
+        self.max_jump_pct = max_jump_pct
+        self.confirm_ticks = confirm_ticks
+        self.stale_seconds = stale_seconds
+        self._last: dict[str, tuple[float, float]] = {}   # символ -> (цена, момент)
+        self._rejected: dict[str, int] = {}               # подряд отвергнутых тиков
 
     # ── Информация о паре (фильтры, базовая валюта) ───────────────────
     def _symbol_info(self, symbol: str) -> dict:
@@ -76,7 +130,56 @@ class Exchange:
         return [float(k[4]) for k in klines]
 
     def get_price(self, symbol: str) -> float:
-        return float(self.client.get_symbol_ticker(symbol=symbol)["price"])
+        """Текущая цена, прошедшая проверку на выброс.
+
+        Бросает SuspectPrice, если тик неправдоподобно далёк от предыдущего.
+        """
+        raw = float(self.client.get_symbol_ticker(symbol=symbol)["price"])
+        return self._checked(symbol, raw, time.monotonic())
+
+    def _checked(self, symbol: str, price: float, now: float) -> float:
+        """Пропускает цену или бракует её как выброс.
+
+        Одиночный тик мимо коридора отвергается, но если следующие тики
+        подтверждают тот же уровень, движение признаётся настоящим: иначе
+        обвал рынка навсегда заблокировал бы торговлю.
+        """
+        prev = self._last.get(symbol)
+
+        # Ноль или минус — это не цена. Такой тик нельзя ни отдать наверх, ни
+        # запомнить как опору: опора с нулём обрушила бы следующее сравнение.
+        if price <= 0:
+            log.warning("%s: биржа вернула цену %.2f — тик отброшен", symbol, price)
+            raise SuspectPrice(symbol, price, prev[0] if prev else 0.0)
+
+        # Сравнивать не с чем: первый тик, выключенная защита или слишком
+        # давняя точка отсчёта (за десять минут рынок уходит куда угодно).
+        if (prev is None or self.max_jump_pct <= 0
+                or now - prev[1] > self.stale_seconds):
+            self._accept(symbol, price, now)
+            return price
+
+        ref = prev[0]
+        if abs(price - ref) / ref * 100 <= self.max_jump_pct:
+            self._accept(symbol, price, now)
+            return price
+
+        seen = self._rejected.get(symbol, 0) + 1
+        if seen >= self.confirm_ticks:
+            log.warning("%s: движение на %+.1f%% подтвердилось за %d тик(ов) — "
+                        "принимаем %.2f как настоящую цену",
+                        symbol, (price / ref - 1) * 100, seen, price)
+            self._accept(symbol, price, now)
+            return price
+
+        self._rejected[symbol] = seen
+        log.warning("%s: тик %.2f отклонён как выброс (%+.1f%% от %.2f) — шаг пропущен",
+                    symbol, price, (price / ref - 1) * 100, ref)
+        raise SuspectPrice(symbol, price, ref)
+
+    def _accept(self, symbol: str, price: float, now: float) -> None:
+        self._last[symbol] = (price, now)
+        self._rejected.pop(symbol, None)
 
     # ── Счёт ───────────────────────────────────────────────────────────
     def get_free_balance(self, asset: str) -> float:

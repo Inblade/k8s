@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from config import Config
-from exchange import Exchange
+from exchange import Exchange, SuspectPrice, _short_error, is_network_error
 from strategy import Signal, compute_indicators, decide
 
 log = logging.getLogger("bot.trader")
@@ -142,8 +142,14 @@ class Trader:
         while stop_event is None or not stop_event.is_set():
             try:
                 self.step()
+            except SuspectPrice as exc:
+                # Выброс в ленте цен, не баг: трейсбек тут только раздул бы лог.
+                log.warning("Шаг пропущен: %s", exc)
             except Exception as exc:  # noqa: BLE001 — бот не должен падать из-за разовой ошибки
-                log.exception("Ошибка в цикле: %s", exc)
+                if is_network_error(exc):
+                    log.warning("Биржа недоступна: %s", _short_error(exc))
+                else:
+                    log.exception("Ошибка в цикле: %s", exc)
             if stop_event is not None:
                 if stop_event.wait(self.cfg.poll_interval_seconds):
                     break

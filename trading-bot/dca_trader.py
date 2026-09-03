@@ -11,7 +11,7 @@ import journal
 from adaptive import AdaptiveController
 from config import Config
 from dca import Action, DcaEngine, DcaParams
-from exchange import Exchange
+from exchange import Exchange, SuspectPrice, _short_error, is_network_error
 from strategy import sma
 from volatility import clamp, mean_abs_change_pct
 from withdrawal import ProfitWithdrawer
@@ -35,33 +35,6 @@ def params_from_config(cfg: Config) -> DcaParams:
     )
 
 
-def is_network_error(exc: BaseException) -> bool:
-    """Сбой связи (сон ноутбука, пропавший Wi-Fi, таймаут биржи), а не баг в коде.
-
-    Ловим по имени класса, чтобы не тащить requests/urllib3 в импорты и не
-    зависеть от того, во что именно python-binance завернул ошибку.
-    """
-    seen = set()
-    cur: BaseException | None = exc
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        name = type(cur).__name__
-        if name in {"ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
-                    "TimeoutError", "ConnectionResetError", "ConnectionAbortedError",
-                    "ConnectionRefusedError", "NameResolutionError", "NewConnectionError",
-                    "MaxRetryError", "ProtocolError", "SSLError", "SSLEOFError",
-                    "ChunkedEncodingError", "RequestException", "gaierror", "OSError"}:
-            return True
-        # Биржа отдала HTML вместо JSON (заглушка Cloudflare/техработы).
-        if name == "BinanceAPIException" and "Invalid JSON" in str(cur):
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
-
-def _short_error(exc: BaseException) -> str:
-    text = " ".join(str(exc).split())
-    return text[:160] + "…" if len(text) > 160 else text
 
 
 def _state_file(symbol: str) -> Path:
@@ -316,6 +289,12 @@ class DcaTrader:
                 if offline:
                     log.info("Связь с биржей восстановлена (было %d неудачных шагов)", offline)
                     offline = 0
+            except SuspectPrice as exc:
+                # Цена не прошла проверку на выброс: настоящая неизвестна, а
+                # действовать по недостоверной хуже, чем пропустить минуту.
+                # Само отклонение уже залогировано в Exchange, здесь только
+                # отмечаем, что шаг пропущен.
+                log.warning("Шаг пропущен: %s", exc)
             except Exception as exc:  # noqa: BLE001 — бот не должен падать из-за разовой ошибки
                 if is_network_error(exc):
                     # Ноутбук уснул / пропал Wi-Fi: это не баг, полный traceback каждую

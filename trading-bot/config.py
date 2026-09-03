@@ -108,6 +108,16 @@ class Config:
 
     poll_interval_seconds: int
 
+    # Защита от выброса в ленте цен: тик, ушедший от предыдущего дальше чем на
+    # столько %, не принимается на веру — шаг пропускается. 0 = выключено.
+    # Движение засчитывается как настоящее, если столько тиков подряд показали
+    # тот же уровень, иначе обвал рынка заблокировал бы торговлю навсегда.
+    # После паузы дольше price_stale_seconds сравнивать не с чем — проверка
+    # отключается до первого нового тика.
+    price_max_jump_pct: float = 5.0
+    price_confirm_ticks: int = 2
+    price_stale_seconds: float = 600.0
+
     # Стоп-лосс на цикл DCA: продать всю позицию, если цена ниже средней входа на
     # столько %. 0 = выключено. Должен быть ШИРЕ суммарного покрытия докупок.
     dca_stop_loss_pct: float = 0.0
@@ -173,6 +183,9 @@ class Config:
             regime_slope_pct=_get_float("REGIME_SLOPE_PCT", 0.6),
             regime_high_vol_pct=_get_float("REGIME_HIGH_VOL_PCT", 2.5),
             poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 60),
+            price_max_jump_pct=_get_float("PRICE_MAX_JUMP_PCT", 5.0),
+            price_confirm_ticks=_get_int("PRICE_CONFIRM_TICKS", 2),
+            price_stale_seconds=_get_float("PRICE_STALE_SECONDS", 600.0),
             dca_stop_loss_pct=_get_float("DCA_STOP_LOSS_PCT", 0.0),
             dca_atr_enabled=_get_bool("DCA_ATR_ENABLED", False),
             dca_atr_period=_get_int("DCA_ATR_PERIOD", 14),
