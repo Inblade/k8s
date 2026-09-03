@@ -265,7 +265,7 @@ class DcaTrader:
         log.info(
             "Старт DCA | монеты: %s | DRY_RUN=%s TESTNET=%s | база=%.0f safety=%.0f x%d "
             "дев=%.1f%% TP=%.1f%% | стоп-лосс=%s | тренд-фильтр=%s "
-            "| бюджет/монета=%.0f, всего=%.0f USDT",
+            "| фильтр цены=%s | бюджет/монета=%.0f, всего=%.0f USDT",
             ", ".join(self.cfg.symbols), self.ex.dry_run, self.ex.testnet,
             self.cfg.dca_base_order, self.cfg.dca_safety_order,
             self.cfg.dca_max_safety_orders, self.cfg.dca_price_deviation_pct,
@@ -274,6 +274,9 @@ class DcaTrader:
             f"{self.cfg.dca_stop_loss_pct:.0f}%" if self.cfg.dca_stop_loss_pct > 0 else "ВЫКЛ",
             f"MA{self.cfg.dca_trend_ma_period}/{self.cfg.dca_trend_interval}"
             if self.cfg.dca_trend_filter_enabled else "ВЫКЛ",
+            # Тихо выключенный фильтр выбросов — такой же сюрприз, как стоп-лосс.
+            f"±{self.ex.max_jump_pct:.0f}%/{self.ex.confirm_ticks} тик(ов)"
+            if getattr(self.ex, "max_jump_pct", 0) > 0 else "ВЫКЛ",
             self.cfg.max_dca_budget(),
             self.cfg.max_dca_budget() * len(self.cfg.symbols),
         )
