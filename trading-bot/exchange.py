@@ -54,6 +54,77 @@ def _short_error(exc: BaseException) -> str:
     return text[:160] + "…" if len(text) > 160 else text
 
 
+class PriceGuard:
+    """Отсеивает недостоверные тики в ленте цен.
+
+    На testnet раз в несколько дней приходил тик на 6-18% мимо рынка, который
+    через минуту возвращался обратно. Бот успевал докупить на провале и продать
+    на возврате, и такие циклы дали 63% всей прибыли за месяц.
+
+    Правило простое: тик, ушедший от предыдущего принятого дальше чем на
+    max_jump_pct, не принимается на веру. Цена при этом НЕ подменяется и не
+    сглаживается — вызывающий код получает SuspectPrice и пропускает шаг, потому
+    что настоящая цена в этот момент неизвестна.
+
+    Три случая, которые важно не перепутать:
+      * одиночный выброс          — отвергаем;
+      * настоящее движение рынка  — подтверждается за confirm_ticks тиков и
+                                    принимается, иначе обвал заблокировал бы
+                                    торговлю навсегда;
+      * долгая пауза              — после stale_seconds сравнивать не с чем
+                                    (ноутбук спал), проверку пропускаем.
+    """
+
+    def __init__(self, max_jump_pct: float = 5.0, confirm_ticks: int = 2,
+                 stale_seconds: float = 600.0):
+        self.max_jump_pct = max_jump_pct
+        self.confirm_ticks = confirm_ticks
+        self.stale_seconds = stale_seconds
+        self._last: dict[str, tuple[float, float]] = {}   # символ -> (цена, момент)
+        self._rejected: dict[str, int] = {}               # подряд отвергнутых тиков
+
+    @property
+    def enabled(self) -> bool:
+        return self.max_jump_pct > 0
+
+    def check(self, symbol: str, price: float, now: float) -> float:
+        prev = self._last.get(symbol)
+
+        # Ноль или минус — это не цена. Такой тик нельзя ни отдать наверх, ни
+        # запомнить как опору: опора с нулём обрушила бы следующее сравнение.
+        if price <= 0:
+            log.warning("%s: биржа вернула цену %.2f — тик отброшен", symbol, price)
+            raise SuspectPrice(symbol, price, prev[0] if prev else 0.0)
+
+        # Сравнивать не с чем: первый тик, выключенная защита или слишком
+        # давняя точка отсчёта (за десять минут рынок уходит куда угодно).
+        if prev is None or not self.enabled or now - prev[1] > self.stale_seconds:
+            self._accept(symbol, price, now)
+            return price
+
+        ref = prev[0]
+        if abs(price - ref) / ref * 100 <= self.max_jump_pct:
+            self._accept(symbol, price, now)
+            return price
+
+        seen = self._rejected.get(symbol, 0) + 1
+        if seen >= self.confirm_ticks:
+            log.warning("%s: движение на %+.1f%% подтвердилось за %d тик(ов) — "
+                        "принимаем %.2f как настоящую цену",
+                        symbol, (price / ref - 1) * 100, seen, price)
+            self._accept(symbol, price, now)
+            return price
+
+        self._rejected[symbol] = seen
+        log.warning("%s: тик %.2f отклонён как выброс (%+.1f%% от %.2f) — шаг пропущен",
+                    symbol, price, (price / ref - 1) * 100, ref)
+        raise SuspectPrice(symbol, price, ref)
+
+    def _accept(self, symbol: str, price: float, now: float) -> None:
+        self._last[symbol] = (price, now)
+        self._rejected.pop(symbol, None)
+
+
 class Exchange:
     def __init__(self, api_key: str, api_secret: str, testnet: bool, dry_run: bool,
                  max_jump_pct: float = 5.0, confirm_ticks: int = 2,
@@ -64,12 +135,7 @@ class Exchange:
         self.client = Client(api_key or None, api_secret or None, testnet=testnet)
         self._info_cache: dict[str, dict] = {}
 
-        # Защита от выброса в ленте цен. 0 = выключена.
-        self.max_jump_pct = max_jump_pct
-        self.confirm_ticks = confirm_ticks
-        self.stale_seconds = stale_seconds
-        self._last: dict[str, tuple[float, float]] = {}   # символ -> (цена, момент)
-        self._rejected: dict[str, int] = {}               # подряд отвергнутых тиков
+        self.guard = PriceGuard(max_jump_pct, confirm_ticks, stale_seconds)
 
     # ── Информация о паре (фильтры, базовая валюта) ───────────────────
     def _symbol_info(self, symbol: str) -> dict:
@@ -135,51 +201,8 @@ class Exchange:
         Бросает SuspectPrice, если тик неправдоподобно далёк от предыдущего.
         """
         raw = float(self.client.get_symbol_ticker(symbol=symbol)["price"])
-        return self._checked(symbol, raw, time.monotonic())
+        return self.guard.check(symbol, raw, time.monotonic())
 
-    def _checked(self, symbol: str, price: float, now: float) -> float:
-        """Пропускает цену или бракует её как выброс.
-
-        Одиночный тик мимо коридора отвергается, но если следующие тики
-        подтверждают тот же уровень, движение признаётся настоящим: иначе
-        обвал рынка навсегда заблокировал бы торговлю.
-        """
-        prev = self._last.get(symbol)
-
-        # Ноль или минус — это не цена. Такой тик нельзя ни отдать наверх, ни
-        # запомнить как опору: опора с нулём обрушила бы следующее сравнение.
-        if price <= 0:
-            log.warning("%s: биржа вернула цену %.2f — тик отброшен", symbol, price)
-            raise SuspectPrice(symbol, price, prev[0] if prev else 0.0)
-
-        # Сравнивать не с чем: первый тик, выключенная защита или слишком
-        # давняя точка отсчёта (за десять минут рынок уходит куда угодно).
-        if (prev is None or self.max_jump_pct <= 0
-                or now - prev[1] > self.stale_seconds):
-            self._accept(symbol, price, now)
-            return price
-
-        ref = prev[0]
-        if abs(price - ref) / ref * 100 <= self.max_jump_pct:
-            self._accept(symbol, price, now)
-            return price
-
-        seen = self._rejected.get(symbol, 0) + 1
-        if seen >= self.confirm_ticks:
-            log.warning("%s: движение на %+.1f%% подтвердилось за %d тик(ов) — "
-                        "принимаем %.2f как настоящую цену",
-                        symbol, (price / ref - 1) * 100, seen, price)
-            self._accept(symbol, price, now)
-            return price
-
-        self._rejected[symbol] = seen
-        log.warning("%s: тик %.2f отклонён как выброс (%+.1f%% от %.2f) — шаг пропущен",
-                    symbol, price, (price / ref - 1) * 100, ref)
-        raise SuspectPrice(symbol, price, ref)
-
-    def _accept(self, symbol: str, price: float, now: float) -> None:
-        self._last[symbol] = (price, now)
-        self._rejected.pop(symbol, None)
 
     # ── Счёт ───────────────────────────────────────────────────────────
     def get_free_balance(self, asset: str) -> float:

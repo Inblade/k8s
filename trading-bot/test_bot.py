@@ -982,13 +982,8 @@ class TestPriceOutlierGuard(unittest.TestCase):
     пришло с таких тиков. Ни один из них не был настоящим движением рынка."""
 
     def guard(self, **kw):
-        from exchange import Exchange
-        ex = Exchange.__new__(Exchange)          # без сети и ключей
-        ex.max_jump_pct = kw.get("max_jump_pct", 5.0)
-        ex.confirm_ticks = kw.get("confirm_ticks", 2)
-        ex.stale_seconds = kw.get("stale_seconds", 600.0)
-        ex._last, ex._rejected = {}, {}
-        return ex
+        from exchange import PriceGuard
+        return PriceGuard(**kw)
 
     def feed(self, ex, prices, step=60.0, start=0.0):
         """Прогоняет ленту цен; отвергнутые тики отмечаются как None."""
@@ -996,7 +991,7 @@ class TestPriceOutlierGuard(unittest.TestCase):
         out, t = [], start
         for price in prices:
             try:
-                out.append(ex._checked("BTCUSDT", price, t))
+                out.append(ex.check("BTCUSDT", price, t))
             except SuspectPrice:
                 out.append(None)
             t += step
@@ -1030,11 +1025,11 @@ class TestPriceOutlierGuard(unittest.TestCase):
     def test_stale_reference_is_not_compared(self):
         """После долгой паузы сравнивать не с чем: рынок ушёл, и это нормально."""
         ex = self.guard()
-        ex._checked("BTCUSDT", 78000.0, 0.0)
-        self.assertEqual(ex._checked("BTCUSDT", 62000.0, 1200.0), 62000.0)
+        ex.check("BTCUSDT", 78000.0, 0.0)
+        self.assertEqual(ex.check("BTCUSDT", 62000.0, 1200.0), 62000.0)
 
     def test_first_tick_always_passes(self):
-        self.assertEqual(self.guard()._checked("BTCUSDT", 78000.0, 0.0), 78000.0)
+        self.assertEqual(self.guard().check("BTCUSDT", 78000.0, 0.0), 78000.0)
 
     def test_disabled_guard_passes_everything(self):
         got = self.feed(self.guard(max_jump_pct=0), [78000.0, 63600.0])
@@ -1044,30 +1039,75 @@ class TestPriceOutlierGuard(unittest.TestCase):
         """Выброс по одной монете не должен влиять на другую."""
         from exchange import SuspectPrice
         ex = self.guard()
-        ex._checked("BTCUSDT", 78000.0, 0.0)
-        ex._checked("ETHUSDT", 3000.0, 0.0)
+        ex.check("BTCUSDT", 78000.0, 0.0)
+        ex.check("ETHUSDT", 3000.0, 0.0)
         with self.assertRaises(SuspectPrice):
-            ex._checked("BTCUSDT", 63000.0, 60.0)
-        self.assertEqual(ex._checked("ETHUSDT", 3010.0, 60.0), 3010.0)
+            ex.check("BTCUSDT", 63000.0, 60.0)
+        self.assertEqual(ex.check("ETHUSDT", 3010.0, 60.0), 3010.0)
 
     def test_garbage_price_is_rejected_not_remembered(self):
         """Нулевая цена, принятая как опора, обрушила бы следующее сравнение."""
         from exchange import SuspectPrice
         ex = self.guard()
-        ex._checked("BTCUSDT", 78000.0, 0.0)
+        ex.check("BTCUSDT", 78000.0, 0.0)
         for bad in (0.0, -1.0):
             with self.assertRaises(SuspectPrice):
-                ex._checked("BTCUSDT", bad, 60.0)
+                ex.check("BTCUSDT", bad, 60.0)
         self.assertEqual(ex._last["BTCUSDT"][0], 78000.0, "мусор стал опорой")
-        self.assertEqual(ex._checked("BTCUSDT", 78100.0, 120.0), 78100.0)
+        self.assertEqual(ex.check("BTCUSDT", 78100.0, 120.0), 78100.0)
 
     def test_garbage_price_on_first_tick(self):
         """Мусор до первой нормальной цены — опоры ещё нет, делить не на что."""
         from exchange import SuspectPrice
         ex = self.guard()
         with self.assertRaises(SuspectPrice):
-            ex._checked("BTCUSDT", 0.0, 0.0)
-        self.assertEqual(ex._checked("BTCUSDT", 78000.0, 60.0), 78000.0)
+            ex.check("BTCUSDT", 0.0, 0.0)
+        self.assertEqual(ex.check("BTCUSDT", 78000.0, 60.0), 78000.0)
+
+
+# ─────────────────────────── повтор по записанной ленте ───────────────────────────
+class TestReplay(unittest.TestCase):
+    """backtest.py replay гоняет не свежие свечи, а ту ленту, которую бот видел,
+    чтобы можно было спросить: что фильтр изменил бы в уже случившемся."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.csv = Path(self.tmp.name) / "equity.csv"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, prices):
+        rows = ["time,source,price,position_qty,position_value,unrealized_pnl,"
+                "realized_pnl,equity,withdrawn,reserve"]
+        for i, p in enumerate(prices):
+            rows.append(f"2026-09-0{i % 9 + 1}T00:00:00+00:00,binance,{p},0,0,0,0,100,0,0")
+        self.csv.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    def test_reads_price_column(self):
+        from backtest import load_recorded
+        self.write([100.0, 101.0, 102.0])
+        self.assertEqual(load_recorded(str(self.csv)), [100.0, 101.0, 102.0])
+
+    def test_skips_broken_rows(self):
+        """Нулевая цена в журнале не должна попасть в прогон как настоящая."""
+        from backtest import load_recorded
+        self.write([100.0, 0.0, 102.0])
+        self.assertEqual(load_recorded(str(self.csv)), [100.0, 102.0])
+
+    def test_guard_drops_spike_from_series(self):
+        from backtest import apply_guard
+        cfg = make_cfg()
+        kept, rejected = apply_guard([100.0, 60.0, 101.0], cfg)
+        self.assertEqual(rejected, 1)
+        self.assertEqual(kept, [100.0, 101.0])
+
+    def test_guard_keeps_clean_series_intact(self):
+        from backtest import apply_guard
+        prices = [100.0, 101.0, 102.5, 101.0]
+        kept, rejected = apply_guard(prices, make_cfg())
+        self.assertEqual(rejected, 0)
+        self.assertEqual(kept, prices)
 
 
 if __name__ == "__main__":

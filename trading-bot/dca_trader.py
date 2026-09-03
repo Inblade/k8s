@@ -275,8 +275,8 @@ class DcaTrader:
             f"MA{self.cfg.dca_trend_ma_period}/{self.cfg.dca_trend_interval}"
             if self.cfg.dca_trend_filter_enabled else "ВЫКЛ",
             # Тихо выключенный фильтр выбросов — такой же сюрприз, как стоп-лосс.
-            f"±{self.ex.max_jump_pct:.0f}%/{self.ex.confirm_ticks} тик(ов)"
-            if getattr(self.ex, "max_jump_pct", 0) > 0 else "ВЫКЛ",
+            f"±{self.ex.guard.max_jump_pct:.0f}%/{self.ex.guard.confirm_ticks} тик(ов)"
+            if getattr(getattr(self.ex, "guard", None), "enabled", False) else "ВЫКЛ",
             self.cfg.max_dca_budget(),
             self.cfg.max_dca_budget() * len(self.cfg.symbols),
         )

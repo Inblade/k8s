@@ -3,8 +3,14 @@
 Запуск:
     python backtest.py swing BTCUSDT 1h 1000
     python backtest.py dca   BTCUSDT 1h 1000
+    python backtest.py replay equity.csv        # по собственной записанной ленте
 
 (первый аргумент-стратегия необязателен — по умолчанию берётся STRATEGY из .env)
+
+Режим replay отличается принципиально: он берёт не свечи с биржи, а ту самую
+ленту цен, которую бот реально видел (колонка price в equity.csv), и прогоняет
+её дважды — как есть и через PriceGuard. Так видно, что именно фильтр выбросов
+изменил бы в уже случившейся истории.
 
 Показывает, как стратегия отработала бы на прошлых данных. ВАЖНО: хорошие
 результаты на истории НЕ гарантируют прибыль в будущем (overfitting, комиссии,
@@ -17,8 +23,9 @@ import sys
 from binance.client import Client
 
 from config import Config
-from dca import Action, DcaEngine
+from dca import Action, DcaEngine, simulate_dca
 from dca_trader import params_from_config
+from exchange import PriceGuard, SuspectPrice
 from strategy import Signal, compute_indicators, decide
 
 FEE_PCT = 0.1  # комиссия Binance ~0.1% на сделку
@@ -40,6 +47,69 @@ def _report(symbol: str, interval: str, n: int, start_cash: float, final: float,
     print(f"Результат:         {pnl:+.2f}%")
     print(f"Сделок/циклов:     {trades} (прибыльных {wins}, winrate {winrate:.1f}%)")
     print("\n⚠️  Прошлые результаты не гарантируют будущую прибыль.")
+
+
+def load_recorded(path: str) -> list[float]:
+    """Цены из журнала капитала (equity.csv): колонка price, по одной в минуту."""
+    import csv
+    with open(path, newline="", encoding="utf-8") as fh:
+        return [float(row["price"]) for row in csv.DictReader(fh) if float(row["price"]) > 0]
+
+
+def apply_guard(prices: list[float], cfg: Config, step: float = 60.0) -> tuple[list[float], int]:
+    """Прогоняет ленту через фильтр. Возвращает принятые цены и число отвергнутых."""
+    guard = PriceGuard(cfg.price_max_jump_pct, cfg.price_confirm_ticks,
+                       cfg.price_stale_seconds)
+    kept, rejected, t = [], 0, 0.0
+    for price in prices:
+        try:
+            kept.append(guard.check("REPLAY", price, t))
+        except SuspectPrice:
+            rejected += 1
+        t += step
+    return kept, rejected
+
+
+def run_replay(path: str) -> None:
+    cfg = Config.load()
+    raw = load_recorded(path)
+    if not raw:
+        print(f"В {path} нет пригодных цен.")
+        return
+
+    # Логи фильтра здесь не нужны: считаем отвергнутые тики сами.
+    import logging
+    logging.getLogger("bot.exchange").setLevel(logging.ERROR)
+
+    kept, rejected = apply_guard(raw, cfg)
+    params = params_from_config(cfg)
+    start = cfg.max_dca_budget() + cfg.dca_base_order  # тот же старт для обоих
+
+    before = simulate_dca(raw, params, start, FEE_PCT)
+    after = simulate_dca(kept, params, start, FEE_PCT)
+
+    print(f"\nПовтор по записанной ленте: {path}")
+    print(f"Тиков: {len(raw)} | отвергнуто фильтром: {rejected} "
+          f"({rejected / len(raw) * 100:.3f}%)")
+    print(f"Фильтр: ±{cfg.price_max_jump_pct:.0f}% / {cfg.price_confirm_ticks} тик(ов)"
+          if cfg.price_max_jump_pct > 0 else "Фильтр: ВЫКЛЮЧЕН")
+    print(f"Стартовый капитал: {start:.2f} USDT\n")
+
+    rows = [
+        ("Итоговый капитал, USDT", "final", "{:.2f}"),
+        ("Результат, %", "pnl_pct", "{:+.2f}"),
+        ("Закрытых циклов", "cycles", "{:.0f}"),
+        ("Прибыльных", "wins", "{:.0f}"),
+        ("Макс. просадка, %", "max_drawdown_pct", "{:.2f}"),
+    ]
+    print(f"{'':24} {'как было':>12} {'с фильтром':>12} {'разница':>12}")
+    for label, key, fmt in rows:
+        b, a = before[key], after[key]
+        print(f"{label:24} {fmt.format(b):>12} {fmt.format(a):>12} "
+              f"{fmt.format(a - b) if key != 'final' else f'{a - b:+.2f}':>12}")
+
+    print("\n⚠️  Это пересчёт уже случившегося, а не предсказание: комиссия взята "
+          f"{FEE_PCT}%, проскальзывание не моделируется.")
 
 
 def run_swing_backtest(symbol: str, interval: str, limit: int) -> None:
@@ -120,6 +190,9 @@ def run_dca_backtest(symbol: str, interval: str, limit: int) -> None:
 
 if __name__ == "__main__":
     args = sys.argv[1:]
+    if args and args[0] == "replay":
+        run_replay(args[1] if len(args) > 1 else "equity.csv")
+        raise SystemExit(0)
     strat = Config.load().strategy
     if args and args[0] in ("swing", "dca"):
         strat = args.pop(0)
