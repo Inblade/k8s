@@ -1,0 +1,7 @@
+[Unit]
+Description=trading-bot healthcheck (alert on crash/hang)
+After=trading-bot.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/trading-bot/deploy/alert-check.sh
