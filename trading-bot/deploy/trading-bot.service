@@ -1,0 +1,17 @@
+[Unit]
+Description=Binance trading bot (DCA/swing) + dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trading-bot
+ExecStart=/opt/trading-bot/.venv/bin/python app.py --headless
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/opt/trading-bot/bot.log
+StandardError=append:/opt/trading-bot/bot.log
+
+[Install]
+WantedBy=multi-user.target
