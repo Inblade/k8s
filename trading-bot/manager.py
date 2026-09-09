@@ -85,6 +85,39 @@ class BotManager:
         self.stop()
         self.start()
 
+    # ── Кнопки безопасной остановки ────────────────────────────────────
+    def pause(self) -> bool:
+        """Пауза новых входов: открытые позиции ведём и закрываем по тейку,
+        новых циклов не открываем. Ничего не продаётся — денег не теряем."""
+        with self._lock:
+            trader = self.trader
+        if trader is not None:
+            trader.pause_new_entries = True
+            log.info("Новые входы поставлены на паузу (позиции ведутся дальше).")
+        return True
+
+    def resume(self) -> bool:
+        with self._lock:
+            trader = self.trader
+        if trader is not None:
+            trader.pause_new_entries = False
+            log.info("Новые входы возобновлены.")
+        return False
+
+    @property
+    def paused(self) -> bool:
+        with self._lock:
+            trader = self.trader
+        return bool(getattr(trader, "pause_new_entries", False)) if trader else False
+
+    def panic(self) -> dict:
+        """Аварийный выход: закрыть все позиции в рынок и остановить бота.
+        ВНИМАНИЕ: продаёт по текущей цене — если она ниже средней, фиксирует убыток."""
+        closed = self.flatten()
+        self.stop()
+        log.warning("ПАНИКА: закрыто позиций=%d, бот остановлен.", closed)
+        return {"closed": closed, "running": self.running}
+
     # ── Действия панели ────────────────────────────────────────────────
     def flatten(self) -> int:
         """Закрывает все открытые позиции в рынок. Возвращает число закрытых."""
@@ -128,6 +161,7 @@ class BotManager:
             cfg = self.cfg
         return {
             "running": self.running,
+            "paused": self.paused,
             "mode": self.mode,
             "symbols": list(cfg.symbols) if cfg else [],
             "budget": cfg.trade_quote_amount if cfg else 0.0,

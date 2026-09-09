@@ -122,6 +122,14 @@ class Config:
     # столько %. 0 = выключено. Должен быть ШИРЕ суммарного покрытия докупок.
     dca_stop_loss_pct: float = 0.0
 
+    # Трейлинг-тейк: вместо продажи ровно на take_profit% — взводимся на этом уровне,
+    # ведём максимум цены и выходим при откате на trail_pct от пика. 0 = фикс-тейк.
+    dca_trail_pct: float = 0.0
+
+    # Аварийный стоп: продать, если все safety-ордера исчерпаны И цена ниже средней
+    # на max_loss_pct. Ограничивает «застревание в мешке». 0 = выключено.
+    dca_max_loss_pct: float = 0.0
+
     # Трендовый фильтр (Faber): новые циклы открываются только когда цена ВЫШЕ
     # длинной скользящей средней — не усредняемся в нисходящем тренде. По данным
     # примерно вдвое снижает максимальную просадку при той же доходности.
@@ -138,6 +146,13 @@ class Config:
     dca_atr_tp_mult: float = 1.5
     dca_atr_min_pct: float = 0.5
     dca_atr_max_pct: float = 8.0
+
+    # Дашборд: адрес прослушивания и токен доступа (для пульта с телефона).
+    # host=127.0.0.1 — только локально (по умолчанию, безопасно). 0.0.0.0 —
+    # виден по сети (доступ с телефона через Tailscale/Wi-Fi). token непустой —
+    # управляющие POST-запросы ИЗВНЕ требуют его; локальные (loopback) — нет.
+    dashboard_host: str = "127.0.0.1"
+    dashboard_token: str = ""
 
     @classmethod
     def load(cls, strict: bool = True) -> "Config":
@@ -174,6 +189,8 @@ class Config:
             withdraw_network=os.getenv("WITHDRAW_NETWORK", "TRX").upper(),
             withdraw_address=os.getenv("WITHDRAW_ADDRESS", "").strip(),
             dashboard_port=_get_int("DASHBOARD_PORT", 8000),
+            dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1").strip(),
+            dashboard_token=os.getenv("DASHBOARD_TOKEN", "").strip(),
             adaptive_enabled=_get_bool("ADAPTIVE_ENABLED", False),
             adaptive_optimize=_get_bool("ADAPTIVE_OPTIMIZE", True),
             regime_interval=os.getenv("REGIME_INTERVAL", "1h"),
@@ -187,6 +204,8 @@ class Config:
             price_confirm_ticks=_get_int("PRICE_CONFIRM_TICKS", 2),
             price_stale_seconds=_get_float("PRICE_STALE_SECONDS", 600.0),
             dca_stop_loss_pct=_get_float("DCA_STOP_LOSS_PCT", 0.0),
+            dca_trail_pct=_get_float("DCA_TRAIL_PCT", 0.0),
+            dca_max_loss_pct=_get_float("DCA_MAX_LOSS_PCT", 0.0),
             dca_atr_enabled=_get_bool("DCA_ATR_ENABLED", False),
             dca_atr_period=_get_int("DCA_ATR_PERIOD", 14),
             dca_atr_step_mult=_get_float("DCA_ATR_STEP_MULT", 1.0),

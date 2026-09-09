@@ -32,6 +32,8 @@ def params_from_config(cfg: Config) -> DcaParams:
         safety_volume_scale=cfg.dca_safety_volume_scale,
         take_profit_pct=cfg.dca_take_profit_pct,
         stop_loss_pct=cfg.dca_stop_loss_pct,
+        trail_pct=cfg.dca_trail_pct,
+        max_loss_pct=cfg.dca_max_loss_pct,
     )
 
 
@@ -61,6 +63,9 @@ class DcaTrader:
                 self.engines[sym] = DcaEngine(params)
         self.withdrawer = ProfitWithdrawer(cfg, exchange)
         self.controller = AdaptiveController(cfg, exchange) if cfg.adaptive_enabled else None
+        # Ручная пауза новых входов (кнопка в дашборде). Ведение уже открытых
+        # позиций и тейк-профит продолжают работать — не открываются лишь новые циклы.
+        self.pause_new_entries = False
 
     def _save(self, symbol: str) -> None:
         _state_file(symbol).write_text(json.dumps(self.engines[symbol].state_dict()))
@@ -82,6 +87,7 @@ class DcaTrader:
 
         order = engine.decide(price)
         if order is None:
+            self._save(symbol)  # decide мог обновить пик трейлинга — сохраняем
             return
 
         if order.action == Action.BUY:
@@ -185,6 +191,9 @@ class DcaTrader:
                 self._apply_atr_spacing(sym)
             # Трендовый фильтр: не открываем новые циклы ниже длинной MA.
             if self.cfg.dca_trend_filter_enabled and not self._trend_ok(sym, prices[sym]):
+                allow = False
+            # Ручная пауза из дашборда перекрывает всё: новых входов нет.
+            if self.pause_new_entries:
                 allow = False
             self._process_symbol(sym, prices[sym], allow)
         self._record_equity(prices)

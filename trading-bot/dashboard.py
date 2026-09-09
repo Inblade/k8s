@@ -23,6 +23,26 @@ app = Flask(__name__)
 # ронять импорт всего приложения — ошибку покажет менеджер в окне (/api/control).
 cfg = Config.load(strict=False)
 
+
+@app.before_request
+def _guard_controls():
+    """Пульт с телефона: управляющие POST-запросы ИЗВНЕ пускаем только по токену.
+    Локальный мак (loopback) доверяем без токена — так локальная работа не меняется.
+    Чтение (GET) не ограничиваем."""
+    if request.method != "POST":
+        return None
+    remote = request.remote_addr or ""
+    if remote in ("127.0.0.1", "::1", "localhost"):
+        return None
+    token = cfg.dashboard_token
+    if not token:
+        return ("Управление доступно только локально. Чтобы рулить с телефона, "
+                "задай DASHBOARD_TOKEN в .env.", 403)
+    supplied = request.headers.get("X-Token") or request.args.get("token") or ""
+    if supplied != token:
+        return ("Неверный токен доступа.", 403)
+    return None
+
 PAGE = """
 <!doctype html>
 <html lang="ru">
@@ -94,6 +114,10 @@ PAGE = """
     <div id="brokers"><div class="muted">—</div></div>
     <h3>Итоги</h3>
     <div id="overview"><div class="muted">—</div></div>
+    <h3>Управление ботом</h3>
+    <button class="btn" id="btnStop">⏹ Стоп бота</button>
+    <button class="btn" id="btnPause" style="border-color:#6b4f00; color:#e3b341">⏸ Пауза входов</button>
+    <button class="btn danger" id="btnPanic">⛔ Паника: закрыть всё и стоп</button>
     <h3>Действия</h3>
     <button class="btn" id="btnSettings">⚙ Настройки</button>
     <button class="btn" id="btnBacktest">📊 Бэктест</button>
@@ -159,6 +183,16 @@ PAGE = """
 <script>
 const PRIMARY = "{{ symbol }}";
 let equityChart, priceChart;
+
+// Пульт с телефона: токен из ?token=... сохраняем и шлём с каждым POST.
+// Локально (мак) токен не нужен — сервер доверяет loopback.
+try{ const t=new URL(location.href).searchParams.get('token'); if(t) localStorage.setItem('dashToken', t); }catch(e){}
+function authFetch(url, opts){
+  opts = opts || {};
+  let t=null; try{ t=localStorage.getItem('dashToken'); }catch(e){}
+  if(t){ opts.headers = Object.assign({}, opts.headers||{}, {'X-Token': t}); }
+  return fetch(url, opts);
+}
 
 function money(x){ return (x>=0?'':'-') + '$' + Math.abs(x).toFixed(2); }
 function cls(x){ return x>=0?'pos':'neg'; }
@@ -249,12 +283,18 @@ async function loadControl(){
   let html = `
     <div class="pos-item">
       <b>Binance · крипта</b>
-      <span class="modeBadge m-${MODE_CLASS[info.mode]||'dry'}" style="float:right">${MODE_LABEL[info.mode]||info.mode}${info.running?'':' · стоп'}</span>
+      <span class="modeBadge m-${MODE_CLASS[info.mode]||'dry'}" style="float:right">${MODE_LABEL[info.mode]||info.mode}${info.running?(info.paused?' · пауза входов':''):' · стоп'}</span>
       <div class="muted" style="margin-top:6px">${(info.symbols||[]).join(', ')||'—'} · бюджет $${(+info.budget||0).toFixed(0)}</div>
       <button class="btn" style="margin-top:8px" onclick="switchMode('${info.mode}')">Переключить режим</button>
     </div>`;
   if(info.error) html += `<div class="pos-item" style="border-color:#7a2a2a">⚠<br><span class="muted">${info.error}</span></div>`;
   document.getElementById('brokers').innerHTML = html;
+
+  // Подписи кнопок управления зависят от состояния бота.
+  const bStop=document.getElementById('btnStop'), bPause=document.getElementById('btnPause');
+  if(bStop) bStop.textContent = info.running ? '⏹ Стоп бота' : '▶ Запустить бота';
+  if(bPause){ bPause.textContent = info.paused ? '▶ Продолжить входы' : '⏸ Пауза входов';
+    bPause.disabled = !info.running; bPause.style.opacity = info.running ? '1' : '0.5'; }
 
   const ov = await (await fetch('/api/overview')).json();
   const o = (ov||[])[0];
@@ -290,17 +330,43 @@ async function switchMode(curMode){
     ? 'Перейти в РЕАЛЬНЫЙ режим? Ордера пойдут НАСТОЯЩИМИ деньгами!'
     : 'Вернуться в TESTNET? Открытые боевые позиции будут ЗАКРЫТЫ (проданы в рынок).';
   if(!confirm(msg)) return;
-  const r = await (await fetch('/api/mode', {method:'POST', headers:{'Content-Type':'application/json'},
+  const r = await (await authFetch('/api/mode', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({target})})).json();
   alert(r.ok ? ('Готово'+(r.closed?` · закрыто позиций: ${r.closed}`:'')+(r.error?(' ⚠ '+r.error):'')) : ('Ошибка: '+r.error));
   loadControl();
 }
 
-// Закрыть все позиции
+// Закрыть все позиции (без остановки бота)
 document.getElementById('btnFlatten').onclick = async ()=>{
   if(!confirm('Закрыть все открытые позиции в рынок?')) return;
-  const r = await (await fetch('/api/flatten', {method:'POST'})).json();
+  const r = await (await authFetch('/api/flatten', {method:'POST'})).json();
   alert('Закрыто позиций: '+r.closed); loadControl();
+};
+
+// ⏹ Стоп / ▶ Старт бота (позиция при стопе остаётся на бирже — денег не теряем)
+document.getElementById('btnStop').onclick = async ()=>{
+  const info = await (await fetch('/api/control')).json();
+  if(info.running){
+    if(!confirm('Остановить бота? Открытая позиция останется на бирже нетронутой, торговый цикл встанет.')) return;
+    await authFetch('/api/stop', {method:'POST'});
+  } else {
+    await authFetch('/api/start', {method:'POST'});
+  }
+  loadControl();
+};
+
+// ⏸ Пауза входов / ▶ Продолжить (открытые позиции ведутся до тейк-профита)
+document.getElementById('btnPause').onclick = async ()=>{
+  const info = await (await fetch('/api/control')).json();
+  await authFetch(info.paused ? '/api/resume' : '/api/pause', {method:'POST'});
+  loadControl();
+};
+
+// ⛔ Паника: закрыть всё в рынок и остановить. Может зафиксировать убыток!
+document.getElementById('btnPanic').onclick = async ()=>{
+  if(!confirm('ПАНИКА: продать все позиции в рынок ПО ТЕКУЩЕЙ ЦЕНЕ и остановить бота?\\n\\nЕсли цена ниже средней входа — это зафиксирует убыток. Для обычной остановки без потерь используй «Стоп бота».')) return;
+  const r = await (await authFetch('/api/panic', {method:'POST'})).json();
+  alert('Закрыто позиций: '+(r.closed||0)+' · бот остановлен'); loadControl();
 };
 
 // Настройки
@@ -326,7 +392,7 @@ document.getElementById('settingsCancel').onclick = ()=> sOverlay.classList.remo
 document.getElementById('settingsSave').onclick = async ()=>{
   const vals = {};
   document.querySelectorAll('#settingsForm input').forEach(i=> vals[i.dataset.k]=i.value);
-  const r = await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+  const r = await (await authFetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(vals)})).json();
   alert(r.ok ? ('Сохранено и перезапущено. Изменено: '+(r.changed.join(', ')||'—')+(r.error?(' ⚠ '+r.error):'')) : 'Ошибка');
   sOverlay.classList.remove('show'); loadControl();
@@ -503,6 +569,38 @@ def flatten():
     return jsonify({"closed": manager.flatten()})
 
 
+@app.route("/api/stop", methods=["POST"])
+def stop():
+    """Безопасный стоп: торговый цикл встаёт, открытая позиция остаётся на бирже."""
+    manager.stop()
+    return jsonify({"running": manager.running})
+
+
+@app.route("/api/start", methods=["POST"])
+def start():
+    manager.start()
+    return jsonify({"running": manager.running, "error": manager.error})
+
+
+@app.route("/api/pause", methods=["POST"])
+def pause():
+    """Мягкая пауза: без новых входов, открытые позиции ведём до тейк-профита."""
+    manager.pause()
+    return jsonify({"paused": manager.paused})
+
+
+@app.route("/api/resume", methods=["POST"])
+def resume():
+    manager.resume()
+    return jsonify({"paused": manager.paused})
+
+
+@app.route("/api/panic", methods=["POST"])
+def panic():
+    """Аварийно: закрыть все позиции в рынок и остановить бота (может зафиксировать убыток)."""
+    return jsonify(manager.panic())
+
+
 @app.route("/api/deposit_address")
 def deposit_address():
     coin = request.args.get("coin", "USDT")
@@ -511,4 +609,4 @@ def deposit_address():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=cfg.dashboard_port, debug=False)
+    app.run(host=cfg.dashboard_host, port=cfg.dashboard_port, debug=False)

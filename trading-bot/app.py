@@ -56,7 +56,7 @@ def main() -> int:
 
     # 2) Веб-сервер дашборда в фоне (без dev-перезагрузчика).
     try:
-        server = make_server("127.0.0.1", cfg.dashboard_port, dashboard.app)
+        server = make_server(cfg.dashboard_host, cfg.dashboard_port, dashboard.app)
     except OSError as exc:
         log.error("Порт %s занят (%s). Останови другой экземпляр: pkill -f app.py",
                   cfg.dashboard_port, exc)

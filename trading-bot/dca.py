@@ -34,6 +34,8 @@ class DcaParams:
     safety_volume_scale: float
     take_profit_pct: float
     stop_loss_pct: float = 0.0  # выход из цикла при просадке ниже средней; 0 = выкл
+    trail_pct: float = 0.0      # трейлинг-тейк: откат от пика для выхода; 0 = фикс-тейк
+    max_loss_pct: float = 0.0   # аварийный стоп при исчерпанных safety; 0 = выкл
 
 
 @dataclass
@@ -42,6 +44,8 @@ class DcaState:
     spent: float = 0.0         # суммарно потрачено котируемой (USDT)
     safety_filled: int = 0     # сколько safety-ордеров уже исполнено
     next_safety_price: float = 0.0  # цена, ниже которой сработает следующая докупка
+    peak_price: float = 0.0    # максимум цены после взвода трейлинг-тейка
+    trailing_armed: bool = False  # достигли тейк-профита, ведём трейлинг
 
     @property
     def in_position(self) -> bool:
@@ -71,13 +75,31 @@ class DcaEngine:
         if not s.in_position:
             return Order(Action.BUY, quote=p.base_order, reason="базовый ордер")
 
-        # Тейк-профит имеет приоритет.
-        if price >= s.avg_entry * (1 + p.take_profit_pct / 100):
+        # Тейк-профит имеет приоритет. Либо фиксированный, либо трейлинг.
+        tp_price = s.avg_entry * (1 + p.take_profit_pct / 100)
+        if p.trail_pct > 0:
+            # Трейлинг: взводимся на TP, ведём пик, выходим на откате trail_pct от пика.
+            if s.trailing_armed or price >= tp_price:
+                s.trailing_armed = True
+                if price > s.peak_price:
+                    s.peak_price = price
+                if price <= s.peak_price * (1 - p.trail_pct / 100):
+                    return Order(Action.SELL_ALL,
+                                 reason=f"трейлинг-тейк: откат {p.trail_pct:g}% от пика {s.peak_price:.2f}")
+                return None  # взведены — держим до отката/нового пика, не докупаем
+        elif price >= tp_price:
             return Order(Action.SELL_ALL, reason=f"тейк-профит {p.take_profit_pct}%")
 
         # Стоп-лосс на цикл: режем убыток, если цена ушла слишком глубоко вниз.
         if p.stop_loss_pct > 0 and price <= s.avg_entry * (1 - p.stop_loss_pct / 100):
             return Order(Action.SELL_ALL, reason=f"стоп-лосс {p.stop_loss_pct:g}%")
+
+        # Аварийный стоп: safety исчерпаны (полностью в позиции) и глубоко в минусе.
+        if (p.max_loss_pct > 0 and s.safety_filled >= p.max_safety_orders
+                and price <= s.avg_entry * (1 - p.max_loss_pct / 100)):
+            return Order(Action.SELL_ALL,
+                         reason=f"аварийный стоп {p.max_loss_pct:g}% "
+                                f"(safety {s.safety_filled}/{p.max_safety_orders})")
 
         # Safety-ордер при достаточной просадке.
         if s.safety_filled < p.max_safety_orders and price <= s.next_safety_price:
