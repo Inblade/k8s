@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ШАБЛОН. Постоянный ssh-тоннель к дашборду бота на сервере (macOS LaunchAgent).
+  Держит http://localhost:8000 проброшенным на сервер: autossh переподключается
+  при обрыве сети/сне, launchd поднимает при входе в систему.
+
+  Установка:
+    1) brew install autossh
+    2) sed 's/__SERVER__/root@<IP-сервера>/' deploy/com.tradingbot.tunnel.plist \
+         > ~/Library/LaunchAgents/com.tradingbot.tunnel.plist
+    3) launchctl load ~/Library/LaunchAgents/com.tradingbot.tunnel.plist
+    Дашборд: http://localhost:8000   (сервер слушает 127.0.0.1:8000, наружу закрыт ufw)
+
+  Путь autossh для Intel-мака: /usr/local/bin/autossh (для Apple Silicon — как ниже).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingbot.tunnel</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/autossh</string>
+    <string>-M</string>
+    <string>0</string>
+    <string>-N</string>
+    <string>-o</string>
+    <string>ServerAliveInterval=30</string>
+    <string>-o</string>
+    <string>ServerAliveCountMax=3</string>
+    <string>-o</string>
+    <string>ExitOnForwardFailure=yes</string>
+    <string>-o</string>
+    <string>BatchMode=yes</string>
+    <string>-o</string>
+    <string>StrictHostKeyChecking=accept-new</string>
+    <string>-L</string>
+    <string>8000:localhost:8000</string>
+    <string>__SERVER__</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AUTOSSH_GATETIME</key>
+    <string>0</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/tradingbot-tunnel.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/tradingbot-tunnel.log</string>
+</dict>
+</plist>
