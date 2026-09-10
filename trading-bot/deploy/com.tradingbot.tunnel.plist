@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   ШАБЛОН. Постоянный ssh-тоннель к дашборду бота на сервере (macOS LaunchAgent).
-  Держит http://localhost:8000 проброшенным на сервер: autossh переподключается
-  при обрыве сети/сне, launchd поднимает при входе в систему.
+  Держит проброшенными на сервер два локальных порта: дашборд бота (8000) и
+  FreqUI контейнера freqtrade-compare (8080). autossh переподключается при обрыве
+  сети/сне, launchd поднимает при входе в систему.
 
   Установка:
     1) brew install autossh
@@ -10,6 +11,11 @@
          > ~/Library/LaunchAgents/com.tradingbot.tunnel.plist
     3) launchctl load ~/Library/LaunchAgents/com.tradingbot.tunnel.plist
     Дашборд: http://localhost:8000   (сервер слушает 127.0.0.1:8000, наружу закрыт ufw)
+    FreqUI:  http://localhost:8080   (контейнер публикует 127.0.0.1:8080, логин admin/<пароль из config.json>)
+
+  ВНИМАНИЕ: ExitOnForwardFailure=yes — если любой из локальных портов уже занят
+  (напр. dev-сервер на 8080), autossh не поднимется вовсе. Тогда смени левый порт,
+  напр. 8088:localhost:8080, и ходи на http://localhost:8088.
 
   Путь autossh для Intel-мака: /usr/local/bin/autossh (для Apple Silicon — как ниже).
 -->
@@ -36,6 +42,8 @@
     <string>StrictHostKeyChecking=accept-new</string>
     <string>-L</string>
     <string>8000:localhost:8000</string>
+    <string>-L</string>
+    <string>8080:localhost:8080</string>
     <string>__SERVER__</string>
   </array>
 
