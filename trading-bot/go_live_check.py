@@ -13,7 +13,7 @@
 Ничего не меняет — только читает. Пороги — в GATES ниже, правь под себя.
 """
 from __future__ import annotations
-import argparse, csv, json, subprocess, sys, urllib.request
+import argparse, csv, json, os, subprocess, sys, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
 
 # ── Пороги (одно место для настройки) ──────────────────────────────────
@@ -173,6 +173,61 @@ def evaluate(args):
                       f"бот {bot_pnl:+.2f}/DD{bot_dd:.1f}% vs эталон {ft_pnl:+.2f}/DD{ft_dd:.1f}% (n={ft_n})"))
     return gates, since
 
+NOTIFY_STATE = "go-live-notify-state.json"
+
+def notify_telegram(base: str, text: str) -> None:
+    """Шлёт в Telegram, если в .env есть TELEGRAM_BOT_TOKEN/CHAT_ID (как alert-check.sh)."""
+    token = chat = None
+    try:
+        with open(f"{base}/.env", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    token = line.split("=",1)[1].strip().strip('"\'')
+                elif line.startswith("TELEGRAM_CHAT_ID="):
+                    chat = line.split("=",1)[1].strip().strip('"\'')
+    except OSError:
+        pass
+    if not token or not chat:
+        print(f"  (уведомление не отправлено: нет TELEGRAM_BOT_TOKEN/CHAT_ID в .env)\n  текст: {text}",
+              file=sys.stderr)
+        return
+    host = os.uname().nodename
+    data = urllib.parse.urlencode({"chat_id": chat, "text": f"🤖 go-live ({host}): {text}"}).encode()
+    try:
+        urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data, timeout=15)
+    except Exception as e:
+        print(f"  (ошибка отправки в Telegram: {e})", file=sys.stderr)
+
+def handle_notify(base: str, gates: list) -> None:
+    """Пингует на переходах: все зелёные / откат / ворота позеленело впервые. Без спама."""
+    green_now = {g.split()[0] for g, s, _ in gates if s == G}
+    go = all(s == G for _, s, _ in gates)
+    path = f"{base}/{NOTIFY_STATE}"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            st = json.load(fh)
+    except (OSError, ValueError):
+        st = {"was_go": False, "ever_green": []}
+    ever = set(st.get("ever_green", []))
+    was_go = st.get("was_go", False)
+
+    newly = green_now - ever
+    if go and not was_go:
+        notify_telegram(base, "✅ ВСЕ ВОРОТА ЗЕЛЁНЫЕ — можно в реал ($300 на BTC, см. правило запуска).")
+    elif was_go and not go:
+        reds = [g.split()[0] for g, s, _ in gates if s == R]
+        notify_telegram(base, f"⚠️ откат: ворота больше не все зелёные. Красные: {', '.join(reds)}")
+    elif newly:
+        done = len(green_now); total = len(gates)
+        notify_telegram(base, f"🟢 позеленело впервые: {', '.join(sorted(newly))} ({done}/{total} ворот)")
+
+    st = {"was_go": go, "ever_green": sorted(ever | green_now)}
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(st, fh, ensure_ascii=False)
+    except OSError as e:
+        print(f"  (не смог сохранить {NOTIFY_STATE}: {e})", file=sys.stderr)
+
 def grep_logs(base, needle, since):
     import glob, os
     n = 0
@@ -192,8 +247,13 @@ def main():
     ap.add_argument("--dir", default=DEFAULT_DIR)
     ap.add_argument("--since", default="2026-09-22", help="начало теста YYYY-MM-DD")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--notify", action="store_true",
+                    help="слать в Telegram на переходах (все зелёные / откат / позеленело)")
     args = ap.parse_args()
     gates, since = evaluate(args)
+
+    if args.notify:
+        handle_notify(args.dir, gates)
 
     if args.json:
         print(json.dumps({"since": since.isoformat(),

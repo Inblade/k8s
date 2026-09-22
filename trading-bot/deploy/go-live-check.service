@@ -5,5 +5,6 @@ After=trading-bot.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/trading-bot
-# Печатает отчёт в journald и дописывает JSON-строку в go-live-history.jsonl
-ExecStart=/bin/sh -c '/usr/bin/python3 /opt/trading-bot/go_live_check.py; /usr/bin/python3 /opt/trading-bot/go_live_check.py --json >> /opt/trading-bot/go-live-history.jsonl'
+# Отчёт в journald + уведомление в Telegram на переходах + JSON-история.
+# Уведомление шлётся только если в .env есть TELEGRAM_BOT_TOKEN/CHAT_ID (как alert-check.sh).
+ExecStart=/bin/sh -c '/usr/bin/python3 /opt/trading-bot/go_live_check.py --notify; /usr/bin/python3 /opt/trading-bot/go_live_check.py --json >> /opt/trading-bot/go-live-history.jsonl'
