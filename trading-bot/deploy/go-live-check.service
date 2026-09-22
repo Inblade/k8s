@@ -1,0 +1,9 @@
+[Unit]
+Description=Trading-bot: проверка готовности к реалу (go-live gates)
+After=trading-bot.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/trading-bot
+# Печатает отчёт в journald и дописывает JSON-строку в go-live-history.jsonl
+ExecStart=/bin/sh -c '/usr/bin/python3 /opt/trading-bot/go_live_check.py; /usr/bin/python3 /opt/trading-bot/go_live_check.py --json >> /opt/trading-bot/go-live-history.jsonl'

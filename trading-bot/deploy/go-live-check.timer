@@ -1,0 +1,9 @@
+[Unit]
+Description=Ежедневная проверка готовности бота к реалу
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
