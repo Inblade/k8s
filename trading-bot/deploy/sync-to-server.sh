@@ -29,6 +29,8 @@ rsync -avz --delete \
   --exclude 'adaptive_state.json' \
   --exclude 'trades.csv' \
   --exclude 'equity.csv' \
+  --exclude 'go-live-history.jsonl' \
+  --exclude 'go-live-notify-state.json' \
   "$SRC" "$TARGET:$DEST/"
 
 echo "Синхронизировано в $TARGET:$DEST"
