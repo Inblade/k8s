@@ -5,6 +5,8 @@ import csv
 from datetime import datetime, timezone
 from pathlib import Path
 
+import notify
+
 DIR = Path(__file__).parent
 TRADES_CSV = DIR / "trades.csv"
 EQUITY_CSV = DIR / "equity.csv"
@@ -43,6 +45,8 @@ def record_trade(symbol: str, side: str, reason: str, price: float, qty: float,
         "price": round(price, 2), "qty": round(qty, 8), "quote": round(quote, 2),
         "avg_entry": round(avg_entry, 2), "realized_pnl": round(realized_pnl, 4),
     })
+    # Уведомление о сделке (тихо молчит без кред/сети — торговлю не роняет).
+    notify.trade(symbol, side, reason, price, qty, quote, avg_entry, realized_pnl, source)
 
 
 def record_equity(price: float, position_qty: float, position_value: float,
